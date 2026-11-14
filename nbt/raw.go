@@ -78,6 +78,22 @@ func (r Raw) Len() int {
 	return len(r.data)
 }
 
+// Bytes is the encoded value without its tag type, as stored. It must not be changed.
+func (r Raw) Bytes() []byte {
+	return r.data
+}
+
+// RawList is a Raw of a list from the bytes a list Raw's Bytes gave, in encoding enc. The
+// bytes are kept, not copied, and not checked until the Raw is decoded.
+func RawList(data []byte, enc Encoding) Raw {
+	return Raw{t: tagSlice, enc: enc, data: data}
+}
+
+// IsList reports whether the Raw holds a list.
+func (r Raw) IsList() bool {
+	return r.t == tagSlice
+}
+
 // IsZero reports whether the Raw holds nothing.
 func (r Raw) IsZero() bool {
 	return r.data == nil
