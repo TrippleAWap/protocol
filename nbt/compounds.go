@@ -171,3 +171,66 @@ func EachField(data []byte, encoding Encoding, fn func(name string, start, end i
 		}
 	}
 }
+
+// EachListCompound calls fn with each compound of the list named field in the root compound
+// encoded in data, decoded one at a time into the same map, until fn returns false. A list of
+// any length is walked holding only one element, so a huge list from an untrusted file cannot
+// make the decode itself use memory in proportion to its length. The map is cleared before each
+// element, so fn must copy what it keeps. Other fields are read past. No such field is no error.
+func EachListCompound(data []byte, encoding Encoding, field string, fn func(m map[string]any) bool) error {
+	d := &Decoder{Encoding: encoding, r: newOffsetReader(bytes.NewBuffer(data))}
+	t, _, err := d.tag()
+	if err != nil {
+		return err
+	}
+	if t != tagStruct {
+		return UnexpectedTagError{Off: d.r.off, TagType: t}
+	}
+	d.depth++
+	for {
+		ft, name, err := d.tag()
+		if err != nil {
+			return err
+		}
+		if ft == tagEnd {
+			return nil
+		}
+		if ft != tagSlice || name != field {
+			if err := d.skipPayload(ft); err != nil {
+				return err
+			}
+			continue
+		}
+		return d.eachListCompound(fn)
+	}
+}
+
+// eachListCompound walks the payload of a list whose type byte is next, decoding each compound.
+func (d *Decoder) eachListCompound(fn func(m map[string]any) bool) error {
+	elem, err := d.r.ReadByte()
+	if err != nil {
+		return BufferOverrunError{Op: "Slice"}
+	}
+	length, err := d.Encoding.Int32(d.r)
+	if err != nil || length < 0 {
+		return BufferOverrunError{Op: "Slice"}
+	}
+	if length == 0 {
+		return nil
+	}
+	if tagType(elem) != tagStruct {
+		return UnexpectedTagError{Off: d.r.off, TagType: tagType(elem)}
+	}
+	d.depth++
+	m := map[string]any{}
+	for range length {
+		clear(m)
+		if err := d.unmarshalCompoundAny(m); err != nil {
+			return err
+		}
+		if !fn(m) {
+			return nil
+		}
+	}
+	return nil
+}
