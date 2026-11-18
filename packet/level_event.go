@@ -5,7 +5,7 @@ import (
 	"github.com/helix-bedrock/protocol"
 )
 
-// The particle types, in BDS 1.26.60's ParticleType order (its name table, 0xF4172B0, plus
+// The particle types, in BDS 1.26.60's ParticleType order (its name table,, plus
 // the one value it leaves unnamed).
 const (
 	ParticleTypeUndefined = iota
