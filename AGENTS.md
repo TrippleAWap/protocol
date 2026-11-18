@@ -47,7 +47,7 @@ go test -race ./...
 1. Bytes on the wire match vanilla Bedrock exactly.
 2. Login uses `AuthenticationType` + `Token`; the old certificate chain is only
    accepted when explicitly enabled.
-3. The original copyright line in `LICENSE` stays.
+3. The original MIT license of the first import stays in `licenses/`, and `CREDITS.md` keeps listing it.
 4. Never panic (see the org rules), including on malformed packets.
 
 ## Gotchas
