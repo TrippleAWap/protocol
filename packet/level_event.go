@@ -5,7 +5,8 @@ import (
 	"github.com/helix-bedrock/protocol"
 )
 
-// The particle types, in BDS 1.26.60's ParticleType order (its name table, 0xF4172B0).
+// The particle types, in BDS 1.26.60's ParticleType order (its name table, 0xF4172B0, plus
+// the one value it leaves unnamed).
 const (
 	ParticleTypeUndefined = iota
 	ParticleTypeBubble
@@ -31,6 +32,9 @@ const (
 	ParticleTypeTerrain
 	ParticleTypeTownAura
 	ParticleTypePortal
+	// ParticleTypeMobPortal has no name in BDS's table but keeps its number: BDS sends
+	// mobspellambient as 35 (AreaEffectCloud) and checks dragonbreath as 49 (its tick).
+	ParticleTypeMobPortal
 	ParticleTypeWaterSplash
 	ParticleTypeWaterSplashManual
 	ParticleTypeWaterWake
