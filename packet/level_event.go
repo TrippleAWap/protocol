@@ -90,6 +90,8 @@ const (
 	ParticleTypeDustPlume
 	ParticleTypeWhiteSmoke
 	ParticleTypeVaultConnection
+	ParticleTypeWindExplosion
+	ParticleTypeWolfArmorCrack
 	ParticleTypeCreakingCrumble
 	ParticleTypePaleOakLeaves
 	ParticleTypeEyeblossomOpen
