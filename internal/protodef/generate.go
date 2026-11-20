@@ -68,7 +68,7 @@ func Generate(dir string) (*Schema, error) {
 		consts:   map[*Field]map[*types.Const]bool{},
 		goFields: map[string]map[string]*Field{},
 	}
-	for _, n := range declaredNatives {
+	for _, n := range declaredNatives() {
 		g.owners[n] = n
 	}
 	al := aliases()
@@ -92,7 +92,10 @@ func Generate(dir string) (*Schema, error) {
 		if sel == nil {
 			return nil, fmt.Errorf("protodef: packet %s has no Marshal method", pk.GoName)
 		}
-		fn := sel.Obj().(*types.Func)
+		fn, ok := sel.Obj().(*types.Func)
+		if !ok {
+			return nil, fmt.Errorf("protodef: Marshal of packet %s is not a method", pk.GoName)
+		}
 		name := g.namedType(fn, "packet_"+pk.Name, func(sc *scope) {
 			g.body(fn, map[int]*binding{-1: {place: "$"}, 0: {io: true}}, sc, "")
 		})
@@ -104,7 +107,7 @@ func Generate(dir string) (*Schema, error) {
 	g.applyMappers()
 
 	out := NewMap()
-	for _, n := range declaredNatives {
+	for _, n := range declaredNatives() {
 		out.Set(n, "native")
 	}
 	for _, n := range al.Keys() {

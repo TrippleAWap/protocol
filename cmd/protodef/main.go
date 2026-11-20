@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -30,7 +31,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 	indent := fs.Bool("indent", true, "indent the JSON")
 	allowIncomplete := fs.Bool("allow-incomplete", false, "write the schema even if some code could not be converted")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("protodef: unexpected arguments %q (name the output file with -o)", fs.Args())
 	}
 	s, err := protodef.Generate(*dir)
 	if err != nil {
@@ -55,8 +62,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	data = append(data, '\n')
 	if *out == "" {
-		_, err = stdout.Write(data)
-		return err
+		if _, err := stdout.Write(data); err != nil {
+			return fmt.Errorf("protodef: write schema: %w", err)
+		}
+		return nil
 	}
 	if err := os.WriteFile(*out, data, 0o644); err != nil { //nolint:gosec // the schema is meant to be shared
 		return fmt.Errorf("protodef: write schema: %w", err)

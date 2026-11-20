@@ -395,7 +395,11 @@ func (d *decoder) read(t any, ctx *obj) (any, error) {
 			return nil, err
 		}
 		sub := &decoder{interp: d.interp, buf: b, taken: d.taken}
-		return sub.read(opts["type"], ctx)
+		v, err := sub.read(opts["type"], ctx)
+		if err == nil && sub.off != len(b) {
+			err = fmt.Errorf("encapsulated: %d of %d bytes left", len(b)-sub.off, len(b))
+		}
+		return v, err
 	}
 	if def, ok := d.lookup(kind); ok && arg == nil {
 		return d.read(def, ctx)
@@ -594,6 +598,14 @@ func (g *generator) gen(t any, ctx *obj) any {
 			fm := f.(map[string]any)
 			g.field, _ = fm["name"].(string)
 			v := g.gen(fm["type"], o)
+			// The Reader requires a legacy_x field to repeat x (as EntityMetadata's legacy
+			// data type): ProtoDef cannot say so, so the generator copies it.
+			if src, ok := strings.CutPrefix(g.field, "legacy_"); ok {
+				if n, ok := g.numberOf(fields, src, o); ok {
+					v = n
+					g.fix(o, src)
+				}
+			}
 			if anon, _ := fm["anon"].(bool); anon {
 				if sub, ok := v.(*obj); ok {
 					for k, x := range sub.vals {
@@ -666,6 +678,41 @@ func (g *generator) gen(t any, ctx *obj) any {
 	}
 	g.conflict = true
 	return nil
+}
+
+// numberOf returns the number held by the field name of container o, whose fields are
+// defined by fields, looking a mapped name up in the field's mapper.
+func (g *generator) numberOf(fields []any, name string, o *obj) (int64, bool) {
+	v, ok := o.vals[name]
+	if !ok {
+		return 0, false
+	}
+	if n, ok := v.(int64); ok {
+		return n, true
+	}
+	s, ok := v.(string)
+	if !ok {
+		return 0, false
+	}
+	for _, f := range fields {
+		fm, _ := f.(map[string]any)
+		if fm["name"] != name {
+			continue
+		}
+		kind, arg := typeKind(fm["type"])
+		if kind != "mapper" {
+			return 0, false
+		}
+		opts, _ := arg.(map[string]any)
+		mappings, _ := opts["mappings"].(map[string]any)
+		for k, mapped := range mappings {
+			if mapped == s {
+				n, err := strconv.ParseInt(k, 10, 64)
+				return n, err == nil
+			}
+		}
+	}
+	return 0, false
 }
 
 // keyValue turns a switch key into a value of the same kind as cur.

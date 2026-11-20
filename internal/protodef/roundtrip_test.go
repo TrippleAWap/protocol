@@ -169,8 +169,11 @@ func TestRoundTrip(t *testing.T) {
 				read := newPacket()
 				read.Marshal(r)
 				if err := r.Err(); err != nil {
-					if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-						t.Fatalf("Reader ran out of data reading what the schema wrote: %v\n%s", err, hex.Dump(data))
+					// The Reader may reject a value the schema cannot rule out (an unknown enum
+					// value, a string too long), but any other error means the bytes did not
+					// line up with what the Reader expects.
+					if !isRejection(err) {
+						t.Fatalf("Reader failed on what the schema wrote: %v\n%s", err, hex.Dump(data))
 					}
 					if firstReject == nil {
 						firstReject = err
@@ -283,8 +286,38 @@ func reportCoverage(t *testing.T, types map[string]any, taken map[string]map[str
 	sort.Strings(missed)
 	t.Logf("switch cases reached: %d of %d", hit, total)
 	for _, m := range missed {
-		t.Logf("not reached: %s", m)
+		if reason, ok := unreachable[m]; ok {
+			t.Logf("not reached: %s (%s)", m, reason)
+			continue
+		}
+		t.Errorf("no sample the Reader accepted reached switch case %s", m)
 	}
+}
+
+// unreachable are the switch cases that no sample the Reader accepts can reach, with
+// the reason found in the Go code. Every other case must be reached by the round trip.
+var unreachable = map[string]string{
+	"ScoreboardEntry.(anon)[default]":                       "the Reader rejects variants without a type name",
+	"packet_text.(anon)[default]":                           "the Reader rejects an empty message, and only known text types have one",
+	"packet_player_update_entity_overrides.(anon)[default]": "the Reader rejects unknown override types",
+	"packet_event.event[agent_command]":                     "no event ordinal for this type: the Reader rejects it (events.go lookupEventOrdinal)",
+	"packet_event.event[agent_created]":                     "no event ordinal for this type",
+	"packet_event.event[pattern_removed]":                   "no event ordinal for this type",
+	"packet_event.event[fish_bucketed]":                     "no event ordinal for this type",
+	"packet_event.event[pet_died]":                          "no event ordinal for this type",
+	"packet_event.event[movement_anomaly]":                  "no event ordinal for this type",
+	"packet_event.event[movement_corrected]":                "no event ordinal for this type",
+	"packet_event.event[extract_honey]":                     "no event ordinal for this type",
+}
+
+// isRejection reports whether err is the Reader refusing a value (UnknownEnumOption,
+// InvalidValue), as opposed to failing to read.
+func isRejection(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return false
+	}
+	msg := err.Error()
+	return strings.HasPrefix(msg, "unknown value '") || strings.HasPrefix(msg, "invalid value '")
 }
 
 // TestNamesCompile checks the names node-protodef's ProtoDefCompiler turns into
@@ -310,7 +343,7 @@ func TestNamesCompile(t *testing.T) {
 			}
 		case "array", "pstring", "buffer":
 			opts, _ := arg.(map[string]any)
-			if c, ok := opts["count"].(string); ok && (!ident.MatchString(c) || unsafeCountNames[c]) {
+			if c, ok := opts["count"].(string); ok && (!ident.MatchString(c) || isUnsafeCountName(c)) {
 				t.Errorf("%s: count %q", where, c)
 			}
 			if kind == "array" {

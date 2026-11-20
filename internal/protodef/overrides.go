@@ -35,17 +35,27 @@ func overrides() map[string]func(g *gen) any {
 			})
 		},
 		// StackRequestItem names its item, so the shield is found by its identifier.
+		// Variant 0 is no item: it has no identifier, and its user data is empty. The rest of
+		// the item is in each case, so that the shield switch only names a field of its own
+		// container.
 		"StackRequestItem": func(g *gen) any {
 			return container([]*Field{
 				{Name: "variant", Type: "varint"},
 				{Name: "legacy_variant", Type: "u8"},
 				{Anon: true, Type: switchOf("variant", mapOf(
-					"0", "void",
-					"1", container([]*Field{{Name: "identifier", Type: "string"}, {Name: "metadata", Type: "zigzag32"}}),
+					"0", container([]*Field{
+						{Name: "count", Type: "li16"},
+						{Name: "block_runtime_id", Type: "varint"},
+						{Name: "extra", Type: encapsulated("varint", g.itemUserData("ItemExtraDataWithoutBlockingTick", false))},
+					}),
+					"1", container([]*Field{
+						{Name: "identifier", Type: "string"},
+						{Name: "metadata", Type: "zigzag32"},
+						{Name: "count", Type: "li16"},
+						{Name: "block_runtime_id", Type: "varint"},
+						{Name: "extra", Type: g.itemExtra("identifier", "minecraft:shield")},
+					}),
 				), nil)},
-				{Name: "count", Type: "li16"},
-				{Name: "block_runtime_id", Type: "varint"},
-				{Name: "extra", Type: g.itemExtra("identifier", "minecraft:shield")},
 			})
 		},
 		// The descriptor type is sent as a string, then turned into an ID that picks the type.
@@ -109,8 +119,8 @@ func (g *gen) itemExtra(ref, shield string) any {
 		encapsulated("varint", "ItemExtraDataWithoutBlockingTick"))
 }
 
-func (g *gen) itemUserData(name string, shield bool) {
-	g.fixedType("override:"+name, name, func() any {
+func (g *gen) itemUserData(name string, shield bool) string {
+	return g.fixedType("override:"+name, name, func() any {
 		fields := []*Field{
 			{Name: "nbt_marker", Type: "li16"},
 			{Name: "nbt", Type: switchOf("nbt_marker", mapOf(
@@ -155,10 +165,13 @@ func (g *gen) scratch() *scope {
 	return sc
 }
 
+// mapOf makes a Map from keys and values in turn: mapOf("a", 1, "b", 2).
 func mapOf(kv ...any) *Map {
 	m := NewMap()
 	for i := 0; i+1 < len(kv); i += 2 {
-		m.Set(kv[i].(string), kv[i+1])
+		if k, ok := kv[i].(string); ok {
+			m.Set(k, kv[i+1])
+		}
 	}
 	return m
 }

@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"go/types"
 	"maps"
+	"sort"
 	"strings"
 )
 
@@ -119,6 +120,52 @@ func (g *gen) decidesType(list []ast.Stmt, e *env, sc *scope) bool {
 	return len(p.dyn) > 0
 }
 
+// containsReturn reports whether list has a return statement, outside function literals
+// and outside statement lists that report invalid data (where the read stops anyway).
+func containsReturn(list []ast.Stmt) bool {
+	errors := false
+	for _, s := range list {
+		if es, ok := s.(*ast.ExprStmt); ok {
+			if c, ok := es.X.(*ast.CallExpr); ok {
+				if sel, ok := unparen(c.Fun).(*ast.SelectorExpr); ok && isIOError(sel.Sel.Name) {
+					errors = true
+				}
+			}
+		}
+	}
+	for _, s := range list {
+		switch s := s.(type) {
+		case *ast.ReturnStmt:
+			if !errors {
+				return true
+			}
+		case *ast.BlockStmt:
+			if containsReturn(s.List) {
+				return true
+			}
+		case *ast.IfStmt:
+			if containsReturn(s.Body.List) || s.Else != nil && containsReturn([]ast.Stmt{s.Else}) {
+				return true
+			}
+		case *ast.SwitchStmt:
+			for _, c := range s.Body.List {
+				if cc, ok := c.(*ast.CaseClause); ok && containsReturn(cc.Body) {
+					return true
+				}
+			}
+		case *ast.ForStmt:
+			if containsReturn(s.Body.List) {
+				return true
+			}
+		case *ast.RangeStmt:
+			if containsReturn(s.Body.List) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func terminates(list []ast.Stmt) bool {
 	if len(list) == 0 {
 		return false
@@ -155,6 +202,12 @@ func (g *gen) ifStmt(s *ast.IfStmt, rest []ast.Stmt, e *env, sc *scope) (consume
 	term = terminates(thenList) && (consumed && terminates(rest) || s.Else != nil && terminatesStmt(s.Else))
 
 	thenKind, elseKind := g.probe(thenList, e, sc), g.probe(elseList, e, sc)
+	// Only a branch that ends in a return ends the function: a return deeper inside a
+	// branch would make the statements after the if conditional, which is not modelled.
+	if thenKind != branchError && !terminates(thenList) && containsReturn(thenList) ||
+		s.Else != nil && elseKind != branchError && !terminatesStmt(s.Else) && containsReturn(elseList) {
+		g.diag(sc, s.Pos(), "return inside a branch that does not end in one")
+	}
 	t, ok := g.test(s.Cond, e, sc)
 	if !ok && thenKind != branchIO && g.decidesType(thenList, e, sc) {
 		// A branch on a value not on the wire that only picks the concrete type of an
@@ -284,8 +337,17 @@ func (g *gen) emitArms(ref, place string, arms []arm, e *env, sc *scope) {
 	}
 	g.noteSwitch(place, fields, sc)
 	sw := switchOf(ref, fields, def)
+	// The cases took their names from a copy of the parent's counts: take theirs, so a
+	// later field does not get one of the same names.
+	for _, r := range results {
+		for n := range r.used {
+			sc.used[n] = max(sc.used[n], r.used[n])
+		}
+	}
 	if single != "-" {
-		name := sc.uniq(single)
+		// The cases named the field from the parent's counts, so the name is free here.
+		name := single
+		sc.used[name] = max(sc.used[name], 1)
 		sc.fields = append(sc.fields, &Field{Name: name, Type: sw})
 		for _, r := range results {
 			sc.commit(r, func(string) string { return name })
@@ -295,9 +357,6 @@ func (g *gen) emitArms(ref, place string, arms []arm, e *env, sc *scope) {
 	sc.fields = append(sc.fields, &Field{Anon: true, Type: sw})
 	for _, r := range results {
 		sc.commit(r, nil)
-		for n := range r.used {
-			sc.used[n] = max(sc.used[n], r.used[n])
-		}
 	}
 }
 
@@ -314,7 +373,10 @@ func (g *gen) switchStmt(s *ast.SwitchStmt, e *env, sc *scope) {
 	var consts []*types.Const
 	hasDefault := false
 	for _, c := range s.Body.List {
-		cc := c.(*ast.CaseClause)
+		cc, ok := c.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
 		a := arm{list: cc.Body, isDefault: cc.List == nil}
 		hasDefault = hasDefault || a.isDefault
 		for _, k := range cc.List {
@@ -330,6 +392,12 @@ func (g *gen) switchStmt(s *ast.SwitchStmt, e *env, sc *scope) {
 	}
 	if !hasDefault {
 		arms = append(arms, arm{isDefault: true})
+	}
+	for _, a := range arms {
+		if containsReturn(a.list) && g.probe(a.list, e, sc) != branchError {
+			g.diag(sc, s.Pos(), "return inside a switch case that does not report an error")
+			break
+		}
 	}
 	place, _ := g.place(s.Tag, e)
 	ref, ok := g.ref(place, sc)
@@ -355,7 +423,10 @@ func ifChain(clauses []ast.Stmt) ast.Stmt {
 	var def []ast.Stmt
 	var conds []*ast.CaseClause
 	for _, c := range clauses {
-		cc := c.(*ast.CaseClause)
+		cc, ok := c.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
 		if cc.List == nil {
 			def = cc.Body
 			continue
@@ -467,11 +538,16 @@ func (g *gen) loop(count any, body []ast.Stmt, e *env, sc *scope) {
 	name := "entries"
 	probe := child(sc, true)
 	g.stmts(body, newEnv(e), probe)
+	var slices []string
 	for p := range probe.places {
 		if i := strings.Index(p, "[]"); i >= 0 {
-			name = placeName(p[:i])
-			break
+			slices = append(slices, p[:i])
 		}
+	}
+	if len(slices) > 0 {
+		// Sorted, as map order would make the name change from run to run.
+		sort.Strings(slices)
+		name = placeName(slices[0])
 	}
 	sc.fields = append(sc.fields, &Field{Name: sc.uniq(name), Type: arrayCount(count, elem)})
 }

@@ -57,7 +57,7 @@ type binding struct {
 type env struct {
 	vars   map[types.Object]*binding
 	parent *env
-	// ioName names the first local field read while inlining an IO method listed in ioInline.
+	// ioName names the first local field read while inlining an IO method ioInline lists.
 	ioName string
 }
 
@@ -161,7 +161,7 @@ func isSelectorPath(path string) bool {
 			return false
 		}
 		for _, r := range part {
-			if !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			if r != '_' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
 				return false
 			}
 		}
@@ -484,7 +484,10 @@ func (g *gen) stmt(s ast.Stmt, e *env, sc *scope) bool {
 			return false
 		}
 		for _, spec := range gd.Specs {
-			vs := spec.(*ast.ValueSpec)
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
 			for _, v := range vs.Values {
 				g.exprCalls(v, e, sc)
 			}
@@ -702,8 +705,8 @@ func (g *gen) hasIOArg(c *ast.CallExpr, e *env) bool {
 
 // ioCall runs a method called on the IO.
 func (g *gen) ioCall(name string, c *ast.CallExpr, e *env, sc *scope) {
-	if ioIgnored[name] {
-		if ioErrors[name] {
+	if isIOIgnored(name) {
+		if isIOError(name) {
 			sc.errored = true
 		}
 		return
@@ -712,7 +715,7 @@ func (g *gen) ioCall(name string, c *ast.CallExpr, e *env, sc *scope) {
 		g.diag(sc, c.Pos(), "IO method %s without arguments", name)
 		return
 	}
-	if fieldName, ok := ioInline[name]; ok {
+	if fieldName, ok := ioInline(name); ok {
 		fn := g.readerMethod(name)
 		if fn == nil {
 			g.diag(sc, c.Pos(), "no Reader method %s", name)
@@ -743,7 +746,7 @@ func (g *gen) ioCall(name string, c *ast.CallExpr, e *env, sc *scope) {
 // ioMethodType returns the type that the IO method name reads, for methods in the IO
 // interface. It reports false for Reader methods outside it.
 func (g *gen) ioMethodType(name string, args []ast.Expr, sc *scope, pos token.Pos) (any, bool) {
-	if t, ok := ioPrimitives[name]; ok {
+	if t, ok := ioPrimitive(name); ok {
 		return t, true
 	}
 	switch name {
@@ -912,7 +915,11 @@ func (g *gen) methodCall(fn *types.Func, recv ast.Expr, c *ast.CallExpr, e *env,
 		g.diag(sc, c.Pos(), "cannot tell the receiver of %s", fn.Name())
 		return
 	}
-	sig := fn.Type().(*types.Signature)
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		g.diag(sc, c.Pos(), "%s is not a method", fn.Name())
+		return
+	}
 	if _, isIface := sig.Recv().Type().Underlying().(*types.Interface); isIface {
 		g.dynamicCall(place, c, sc)
 		return
@@ -955,9 +962,8 @@ func (g *gen) methodType(fn *types.Func) string {
 
 // typeName names the type of a method's receiver, or a package-level function.
 func typeName(fn *types.Func) string {
-	sig := fn.Type().(*types.Signature)
 	name := fn.Name()
-	if sig.Recv() != nil {
+	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
 		t := sig.Recv().Type()
 		if p, ok := t.(*types.Pointer); ok {
 			t = p.Elem()
@@ -992,7 +998,11 @@ func (g *gen) marshalerType(t types.Type, sc *scope, pos token.Pos) any {
 		g.diag(sc, pos, "type %s has no Marshal method", t)
 		return "void"
 	}
-	fn := sel.Obj().(*types.Func)
+	fn, ok := sel.Obj().(*types.Func)
+	if !ok {
+		g.diag(sc, pos, "Marshal of %s is not a method", t)
+		return "void"
+	}
 	return g.methodType(fn)
 }
 
@@ -1020,8 +1030,8 @@ func (g *gen) funcCall(fn *types.Func, c *ast.CallExpr, e *env, sc *scope) {
 		return
 	}
 	// A helper of the form func(IO, *T, ...) reads a T: a type of its own.
-	sig := fn.Type().(*types.Signature)
-	if sig.Params().Len() >= 2 && len(c.Args) >= 2 && g.isIO(c.Args[0], e) {
+	sig, ok := fn.Type().(*types.Signature)
+	if ok && sig.Params().Len() >= 2 && len(c.Args) >= 2 && g.isIO(c.Args[0], e) {
 		if ptr, ok := sig.Params().At(1).Type().(*types.Pointer); ok && !isBasic(ptr.Elem()) {
 			if place, ok := g.target(c.Args[1], e); ok {
 				name := g.funcType(fn)
@@ -1084,7 +1094,10 @@ func (g *gen) funcValueType(f ast.Expr, place string, e *env, sc *scope) any {
 			return "void"
 		}
 		if sel, ok := g.p.info.Selections[x]; ok && sel.Kind() == types.MethodVal {
-			fn := sel.Obj().(*types.Func)
+			fn, ok := sel.Obj().(*types.Func)
+			if !ok {
+				break
+			}
 			// A method of a context value, such as CommandEnumContext.Marshal(IO, *T).
 			return g.namedType(fn, typeName(fn), func(nsc *scope) {
 				g.body(fn, map[int]*binding{0: {io: true}, 1: {place: "$"}}, nsc, "")
@@ -1166,7 +1179,10 @@ func (g *gen) lookupTable(fn *types.Func) *lookupTable {
 	if !ok {
 		return nil
 	}
-	sig := fn.Type().(*types.Signature)
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok {
+		return nil
+	}
 	var iface types.Type
 	returns := false
 	switch {
@@ -1194,8 +1210,11 @@ func (g *gen) lookupTable(fn *types.Func) *lookupTable {
 		return nil
 	}
 	t := &lookupTable{types: map[string]types.Type{}, returns: returns, consts: map[string]*types.Const{}}
-	for _, cc := range sw.Body.List {
-		cc := cc.(*ast.CaseClause)
+	for _, s := range sw.Body.List {
+		cc, ok := s.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
 		var concrete types.Type
 		for _, s := range cc.Body {
 			var x ast.Expr
@@ -1264,7 +1283,7 @@ func (g *gen) countRef(x ast.Expr, e *env, sc *scope) (any, bool) {
 		g.diag(sc, x.Pos(), "array count %s is a field of an outer container", r)
 		return r, true
 	}
-	if !unsafeCountNames[r] {
+	if !isUnsafeCountName(r) {
 		return r, true
 	}
 	// The compiled array code has locals of these names, and the compiler renames fields
@@ -1290,9 +1309,13 @@ func (g *gen) countRef(x ast.Expr, e *env, sc *scope) (any, bool) {
 	return r, true
 }
 
-// unsafeCountNames are field names an array count cannot refer to: locals of the code
-// ProtoDefCompiler generates for an array, and names it renames in containers.
-var unsafeCountNames = map[string]bool{
-	"count": true, "countSize": true, "data": true, "size": true, "i": true, "elem": true,
-	"value": true, "enum": true, "default": true, "offset": true, "buffer": true, "ctx": true,
+// isUnsafeCountName reports whether an array count cannot refer to a field of this name:
+// a local of the code ProtoDefCompiler generates for an array, or a name it renames in
+// containers.
+func isUnsafeCountName(name string) bool {
+	switch name {
+	case "count", "countSize", "data", "size", "i", "elem", "value", "enum", "default", "offset", "buffer", "ctx":
+		return true
+	}
+	return false
 }
