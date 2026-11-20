@@ -4,10 +4,25 @@
 // The schema is derived by reading the Marshal methods of every packet and shared type
 // as the Reader runs them: each IO call becomes a field, helpers such as Slice and
 // OptionalFunc become arrays and options, and conditions on fields read earlier
-// become switches. Only the few encodings that cannot be followed statically (the
+// become switches. Fields a switch branches on get a mapper naming their values after
+// the Go constants. Only the few encodings that cannot be followed statically (the
 // item user-data sub-buffer and the stack request action variant shift) are written by
-// hand in overrides.go, and a test decodes packets written by the real Writer with the
-// generated schema to check that both agree byte for byte.
+// hand in overrides.go.
+//
+// The tests check the schema against the Reader and Writer for every packet: random
+// values encoded with the schema must be read by the Reader with no bytes left over and
+// with the same values in the Go struct, and what the Writer writes back must decode
+// with the schema.
+//
+// Limits of the schema, all from ProtoDef having no way to say them:
+//   - It accepts some values the Reader rejects: strings that must be one of a few
+//     (Schema.StringValues lists them), numbers out of an enum's range, and events that
+//     have no ordinal.
+//   - A mapper leaves a value without a name as a number. node-protodef's compiler
+//     (used by bedrock-protocol) does so too; its interpreter rejects such values.
+//   - The item user data is an "encapsulated" type whose length 0 means no data, as
+//     node-protodef reads it.
+//   - The one Bitset (131 bits) is a varint128.
 package protodef
 
 import (
