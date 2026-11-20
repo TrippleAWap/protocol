@@ -27,9 +27,10 @@ type Schema struct {
 	Types *Map
 	// Packets lists every packet in the pool, by ID.
 	Packets []Packet
-	// StringValues maps a type name, then a field name, to the only values the Reader
-	// accepts for that string field. ProtoDef cannot say this, so it is not in the JSON.
-	StringValues map[string]map[string][]string
+	// Values maps a type name, then a field name, to the only values the Reader accepts
+	// for that field: strings, or numbers written in decimal. ProtoDef cannot say this,
+	// so it is not in the JSON.
+	Values map[string]map[string][]string
 	// goFields maps a type name, then a field name, to the paths of the Go struct fields
 	// the Reader reads it into (one per switch case), for fields read straight into one.
 	// A path starting with ~ is a field of another integer type (IntegerFunc).
@@ -56,20 +57,20 @@ func Generate(dir string) (*Schema, error) {
 		return nil, fmt.Errorf("protodef: protocol.IO or protocol.Reader not found")
 	}
 	g := &gen{
-		p:            p,
-		ioType:       ioObj.Type(),
-		reader:       types.NewPointer(readerObj.Type()),
-		named:        NewMap(),
-		names:        map[any]string{},
-		owners:       map[string]any{},
-		lookups:      map[*types.Func]*lookupTable{},
-		inlining:     map[*types.Func]bool{},
-		stringValues: map[string]map[string][]string{},
-		overrides:    overrides(),
-		visited:      map[*ast.CallExpr]bool{},
-		entered:      map[*ast.BlockStmt]bool{},
-		consts:       map[*Field]map[*types.Const]bool{},
-		goFields:     map[string]map[string]*Field{},
+		p:         p,
+		ioType:    ioObj.Type(),
+		reader:    types.NewPointer(readerObj.Type()),
+		named:     NewMap(),
+		names:     map[any]string{},
+		owners:    map[string]any{},
+		lookups:   map[*types.Func]*lookupTable{},
+		inlining:  map[*types.Func]bool{},
+		values:    map[string]map[string][]string{},
+		overrides: overrides(),
+		visited:   map[*ast.CallExpr]bool{},
+		entered:   map[*ast.BlockStmt]bool{},
+		consts:    map[*Field]map[*types.Const]bool{},
+		goFields:  map[string]map[string]*Field{},
 	}
 	for _, n := range declaredNatives() {
 		g.owners[n] = n
@@ -149,7 +150,7 @@ func Generate(dir string) (*Schema, error) {
 			slices.Sort(paths)
 		}
 	}
-	return &Schema{Types: out, Packets: packets, StringValues: g.stringValues, Diagnostics: diags, goFields: goFields}, nil
+	return &Schema{Types: out, Packets: packets, Values: g.values, Diagnostics: diags, goFields: goFields}, nil
 }
 
 // packets reads the packet pool from the init function of the packet package: every

@@ -25,6 +25,8 @@ import (
 type obj struct {
 	vals   map[string]any
 	parent *obj
+	// typ is the name of the type the decoder read the container as, if it has one.
+	typ string
 }
 
 func newObj(parent *obj) *obj { return &obj{vals: map[string]any{}, parent: parent} }
@@ -143,6 +145,26 @@ type decoder struct {
 }
 
 var errShort = errors.New("unexpected end of data")
+
+// The sites of a schema: each switch, option and array, identified by its value in the
+// decoded JSON (which every test shares), for the coverage of the round trip.
+func switchSite(opts map[string]any) string { return fmt.Sprintf("S%p", opts) }
+func arraySite(opts map[string]any) string  { return fmt.Sprintf("A%p", opts) }
+func optionSite(t any) string {
+	s, _ := t.([]any)
+	return fmt.Sprintf("O%p", s)
+}
+
+// reach records that a sample reached branch of site.
+func (d *decoder) reach(site, branch string) {
+	if d.taken == nil {
+		return
+	}
+	if d.taken[site] == nil {
+		d.taken[site] = map[string]bool{}
+	}
+	d.taken[site][branch] = true
+}
 
 func (d *decoder) take(n int) ([]byte, error) {
 	if n < 0 || d.off+n > len(d.buf) {
@@ -334,6 +356,9 @@ func (d *decoder) read(t any, ctx *obj) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if n > 0 {
+			d.reach(arraySite(opts), "nonempty")
+		}
 		out := make([]any, 0, min(n, 64))
 		for i := 0; i < n; i++ {
 			v, err := d.read(opts["type"], ctx)
@@ -351,6 +376,7 @@ func (d *decoder) read(t any, ctx *obj) (any, error) {
 		if b[0] == 0 {
 			return nil, nil
 		}
+		d.reach(optionSite(t), "present")
 		return d.read(arg, ctx)
 	case "switch":
 		opts := arg.(map[string]any)
@@ -362,13 +388,7 @@ func (d *decoder) read(t any, ctx *obj) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("switch on %s: no case for %v", opts["compareTo"], holder.vals[name])
 		}
-		if d.taken != nil {
-			site := fmt.Sprintf("%p", opts)
-			if d.taken[site] == nil {
-				d.taken[site] = map[string]bool{}
-			}
-			d.taken[site][caseKey(opts, holder.vals[name], d.vars)] = true
-		}
+		d.reach(switchSite(opts), caseKey(opts, holder.vals[name], d.vars))
 		return d.read(ct, ctx)
 	case "mapper":
 		opts := arg.(map[string]any)
@@ -402,7 +422,11 @@ func (d *decoder) read(t any, ctx *obj) (any, error) {
 		return v, err
 	}
 	if def, ok := d.lookup(kind); ok && arg == nil {
-		return d.read(def, ctx)
+		v, err := d.read(def, ctx)
+		if o, isObj := v.(*obj); isObj && o.typ == "" {
+			o.typ = kind
+		}
+		return v, err
 	}
 	return nil, fmt.Errorf("unknown type %v", t)
 }
@@ -424,11 +448,14 @@ type generator struct {
 	// conflict is set when a value could not be made to fit, so the sample is dropped.
 	conflict bool
 	depth    int
-	// strings holds the values the Reader accepts for some string fields, by type and
-	// field name; stack and field say where the generator is.
-	strings map[string]map[string][]string
-	stack   []string
-	field   string
+	// nodes counts the values made, so that deep types still get options and arrays
+	// while a sample stays small.
+	nodes int
+	// values holds the values the Reader accepts for some fields, by type and field
+	// name; stack and field say where the generator is.
+	values map[string]map[string][]string
+	stack  []string
+	field  string
 }
 
 // small returns a number that is often 0 and mostly below 8, as enums and sizes are.
@@ -440,6 +467,19 @@ func (g *generator) small() int64 {
 		return int64(g.rng.IntN(8))
 	}
 	return int64(g.rng.IntN(1 << 15))
+}
+
+// accepted returns one of the values the Reader accepts for the field being made, if
+// only some are.
+func (g *generator) accepted() (string, bool) {
+	if len(g.stack) == 0 {
+		return "", false
+	}
+	vals := g.values[g.stack[len(g.stack)-1]][g.field]
+	if len(vals) == 0 {
+		return "", false
+	}
+	return vals[g.rng.IntN(len(vals))], true
 }
 
 // integer returns a value of an integer type: mostly small, sometimes the extremes of
@@ -530,13 +570,18 @@ func (g *generator) length(opts map[string]any, ctx *obj) int {
 			return n
 		}
 	}
-	if g.depth > 6 || g.rng.IntN(2) == 0 {
+	if g.full() || g.rng.IntN(2) == 0 {
 		return 0
 	}
 	return 1 + g.rng.IntN(3)
 }
 
+// full reports whether the sample is big enough: options are left out and arrays empty
+// from then on. The depth limit stops recursive types.
+func (g *generator) full() bool { return g.nodes > 3000 || g.depth > 24 }
+
 func (g *generator) gen(t any, ctx *obj) any {
+	g.nodes++
 	kind, arg := typeKind(t)
 	switch kind {
 	case "void":
@@ -544,6 +589,11 @@ func (g *generator) gen(t any, ctx *obj) any {
 	case "bool":
 		return g.rng.IntN(2) == 0
 	case "u8", "byterot", "varint", "varint64", "varint128", "lu16", "lu32", "lu64", "li16", "li32", "i32", "li64", "zigzag32", "zigzag64", "i8":
+		if v, ok := g.accepted(); ok {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+				return n
+			}
+		}
 		return g.integer(kind)
 	case "lf32", "lf64":
 		if g.rng.IntN(4) == 0 {
@@ -566,10 +616,8 @@ func (g *generator) gen(t any, ctx *obj) any {
 		return map[string]any{"v": int32(g.rng.IntN(100))}
 	case "pstring":
 		opts, _ := arg.(map[string]any)
-		if len(g.stack) > 0 {
-			if vals := g.strings[g.stack[len(g.stack)-1]][g.field]; len(vals) > 0 {
-				return vals[g.rng.IntN(len(vals))]
-			}
+		if v, ok := g.accepted(); ok {
+			return v
 		}
 		n := 1 + g.rng.IntN(6)
 		if c, ok := opts["count"]; ok {
@@ -631,7 +679,7 @@ func (g *generator) gen(t any, ctx *obj) any {
 		g.depth--
 		return out
 	case "option":
-		if g.depth > 6 || g.rng.IntN(2) == 0 {
+		if g.full() || g.rng.IntN(2) == 0 {
 			return nil
 		}
 		return []any{g.gen(arg, ctx)}
@@ -647,7 +695,8 @@ func (g *generator) gen(t any, ctx *obj) any {
 		fields, _ := opts["fields"].(map[string]any)
 		if !g.isFixed(holder, name) {
 			keys := keysOf(fields)
-			if len(keys) > 0 && (!hasDefault || g.rng.IntN(4) != 0) {
+			// Each case, the default included, is as likely.
+			if len(keys) > 0 && (!hasDefault || g.rng.IntN(len(keys)+1) != 0) {
 				k := keys[g.rng.IntN(len(keys))]
 				cur = g.keyValue(k, cur)
 				holder.vals[name] = cur
@@ -663,6 +712,12 @@ func (g *generator) gen(t any, ctx *obj) any {
 	case "mapper":
 		opts := arg.(map[string]any)
 		mappings := opts["mappings"].(map[string]any)
+		if v, ok := g.accepted(); ok {
+			if name, mapped := mappings[v]; mapped {
+				return name
+			}
+			return v
+		}
 		keys := keysOf(mappings)
 		return mappings[keys[g.rng.IntN(len(keys))]]
 	case "encapsulated":
@@ -942,8 +997,9 @@ func isNamedContainer(in *interp, t any) bool {
 	return k == "container"
 }
 
-// diffValues returns the paths at which two decoded values differ. Array indexes are
-// written as [], so that a path names a field of a type, not of one value.
+// diffValues returns the paths at which two decoded values differ. A path is a chain of
+// named types and the path in each, such as packet_add_player.metadata>EntityMetadata.key. Array indexes are written as [], so that a
+// path names a field of a type, not of one value.
 func diffValues(a, b any, path string, out map[string]bool) {
 	switch x := a.(type) {
 	case *obj:
@@ -951,6 +1007,15 @@ func diffValues(a, b any, path string, out map[string]bool) {
 		if !ok {
 			out[path] = true
 			return
+		}
+		// A named type starts a new part of the path, after ">": a field that the Writer
+		// rewrites is rewritten wherever its type is used.
+		if x.typ != "" {
+			if path == "" {
+				path = x.typ
+			} else {
+				path += ">" + x.typ
+			}
 		}
 		for _, k := range keysOf(x.vals) {
 			diffValues(x.vals[k], y.vals[k], path+"."+k, out)

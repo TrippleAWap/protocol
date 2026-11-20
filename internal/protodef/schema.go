@@ -17,7 +17,7 @@
 //
 // Limits of the schema, all from ProtoDef having no way to say them:
 //   - It accepts some values the Reader rejects: strings that must be one of a few
-//     (Schema.StringValues lists them), numbers out of an enum's range, and events that
+//     (Schema.Values lists them), numbers out of an enum's range, and events that
 //     have no ordinal.
 //   - A mapper leaves a value without a name as a number. node-protodef's compiler
 //     (used by bedrock-protocol) does so too; its interpreter rejects such values.

@@ -49,9 +49,11 @@ func ioPrimitive(name string) (any, bool) {
 		return "vec3f", true
 	case "Vec2":
 		return "vec2f", true
-	// SoundPos is a BlockPos holding the position times 8.
-	case "BlockPos", "SoundPos":
+	case "BlockPos":
 		return "BlockCoordinates", true
+	// SoundPos is a BlockPos holding the position times 8.
+	case "SoundPos":
+		return "SoundPosition", true
 	case "ChunkPos":
 		return "ChunkCoordinates", true
 	case "SubChunkPos":
@@ -120,6 +122,7 @@ func aliases() *Map {
 	m.Set("vec3f", container([]*Field{{Name: "x", Type: "lf32"}, {Name: "y", Type: "lf32"}, {Name: "z", Type: "lf32"}}))
 	m.Set("vec2f", container([]*Field{{Name: "x", Type: "lf32"}, {Name: "y", Type: "lf32"}}))
 	m.Set("BlockCoordinates", container([]*Field{{Name: "x", Type: "zigzag32"}, {Name: "y", Type: "zigzag32"}, {Name: "z", Type: "zigzag32"}}))
+	m.Set("SoundPosition", container([]*Field{{Name: "x", Type: "zigzag32"}, {Name: "y", Type: "zigzag32"}, {Name: "z", Type: "zigzag32"}}))
 	m.Set("ChunkCoordinates", container([]*Field{{Name: "x", Type: "zigzag32"}, {Name: "z", Type: "zigzag32"}}))
 	m.Set("vec3li", container([]*Field{{Name: "x", Type: "li32"}, {Name: "y", Type: "li32"}, {Name: "z", Type: "li32"}}))
 	m.Set("ColourRGBf", container([]*Field{{Name: "r", Type: "lf32"}, {Name: "g", Type: "lf32"}, {Name: "b", Type: "lf32"}}))

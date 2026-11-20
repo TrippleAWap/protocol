@@ -253,12 +253,24 @@ func (g *gen) ifStmt(s *ast.IfStmt, rest []ast.Stmt, e *env, sc *scope) (consume
 		// value from it; any other branch is a check of values already read.
 		if ok {
 			g.emitArms(t.ref, t.place, arms, e, sc)
+		} else {
+			// Run them anyway for what they tell of the values read before, such as
+			// if v, ok := x.Value(); ok { fromString(v) }; the scopes are thrown away.
+			g.dryRun(thenList, e, sc)
+			g.dryRun(elseList, e, sc)
 		}
 		return consumed, term
 	case thenKind == branchError:
+		// if x != 16 { error }: x must be 16.
+		if ok && t.neg {
+			g.recordValues(t.place, t.keys, sc)
+		}
 		g.stmts(elseList, e, sc)
 		return consumed, term
 	case elseKind == branchError:
+		if ok && !t.neg {
+			g.recordValues(t.place, t.keys, sc)
+		}
 		g.stmts(thenList, e, sc)
 		return consumed, term
 	}
@@ -304,7 +316,7 @@ func (g *gen) emitArms(ref, place string, arms []arm, e *env, sc *scope) {
 		}
 		if place != "" {
 			g.derive(place, arms, results, sc)
-			g.recordStrings(place, arms, results, sc)
+			g.recordArms(place, arms, results, sc)
 		}
 		return
 	}

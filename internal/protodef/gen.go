@@ -29,9 +29,8 @@ type gen struct {
 	diags []string
 	// stack holds the names of the types being built.
 	stack []string
-	// stringValues maps type name, then field name, to the only strings the Reader
-	// accepts.
-	stringValues map[string]map[string][]string
+	// values maps type name, then field name, to the only values the Reader accepts.
+	values map[string]map[string][]string
 	// consts holds the constants each field is compared with (see mapper.go).
 	consts map[*Field]map[*types.Const]bool
 	// uses holds every switch on a field, whose keys applyMappers renames.

@@ -43,6 +43,7 @@ func (g *gen) helper(name string, c *ast.CallExpr, e *env, sc *scope) bool {
 			return true
 		}
 		g.add(sc, e, place, option(g.funcValueType(arg(2), place+".val", e, sc)))
+		g.optionValue(place, sc)
 	case "OptionalMarshaler":
 		place, ok := g.target(arg(1), e)
 		if !ok {
@@ -50,6 +51,7 @@ func (g *gen) helper(name string, c *ast.CallExpr, e *env, sc *scope) bool {
 			return true
 		}
 		g.add(sc, e, place, option(g.marshalerType(optionalElem(g.p.info.TypeOf(arg(1))), sc, c.Pos())))
+		g.optionValue(place, sc)
 	case "IntegerFunc":
 		place, ok := g.target(arg(0), e)
 		if !ok {
@@ -123,4 +125,13 @@ func optionalElem(t types.Type) types.Type {
 		return n.TypeArgs().At(0)
 	}
 	return t
+}
+
+// optionValue makes the value inside the option at place stand for the option's field:
+// a ProtoDef switch on an option compares its value (or no value). Code reaches the
+// value through Optional.Value, as in if v, ok := x.Value(); ok { ... }.
+func (g *gen) optionValue(place string, sc *scope) {
+	if name := sc.places[place]; name != "" {
+		sc.places[place+".val"] = name
+	}
 }

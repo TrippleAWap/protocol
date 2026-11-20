@@ -251,3 +251,38 @@ func isPlaceExpr(x ast.Expr) bool {
 	}
 	return false
 }
+
+// optionalValue binds v in v, ok := x.Value() for a protocol.Optional x to the value
+// inside x. It reports false for other statements.
+func (g *gen) optionalValue(lhs, rhs ast.Expr, e *env) bool {
+	c, ok := unparen(rhs).(*ast.CallExpr)
+	if !ok || len(c.Args) != 0 {
+		return false
+	}
+	sel, ok := unparen(c.Fun).(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Value" {
+		return false
+	}
+	n, ok := pointee(g.p.info.TypeOf(sel.X)).(*types.Named)
+	if !ok || n.Obj().Pkg() != g.p.root || n.Obj().Name() != "Optional" {
+		return false
+	}
+	p, ok := g.place(sel.X, e)
+	if !ok {
+		return false
+	}
+	if id, ok := unparen(lhs).(*ast.Ident); ok && id.Name != "_" {
+		if o := g.obj(id); o != nil {
+			e.vars[o] = &binding{place: p + ".val", copy: true}
+		}
+	}
+	return true
+}
+
+// pointee returns the type a pointer type points to, or t.
+func pointee(t types.Type) types.Type {
+	if p, ok := t.(*types.Pointer); ok {
+		return p.Elem()
+	}
+	return t
+}

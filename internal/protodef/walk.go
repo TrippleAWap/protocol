@@ -40,6 +40,9 @@ func (g *gen) stmt(s ast.Stmt, e *env, sc *scope) bool {
 		if len(s.Rhs) == 1 && g.lookupAssign(s.Lhs[0], s.Rhs[0], e, sc) {
 			return false
 		}
+		if len(s.Lhs) == 2 && len(s.Rhs) == 1 && g.optionalValue(s.Lhs[0], s.Rhs[0], e) {
+			return false
+		}
 		for _, r := range s.Rhs {
 			g.exprCalls(r, e, sc)
 		}

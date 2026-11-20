@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/constant"
 	"go/token"
-	"strconv"
 )
 
 // fact is what is known about a value that is not read but set from constants.
@@ -123,39 +122,46 @@ func (g *gen) derivedTest(place string, v constant.Value, neq bool, sc *scope) (
 	return test{ref: ref, keys: match, neg: neq}, true
 }
 
-// recordStrings notes that the string field at src only takes the keys of arms, when a
-// switch on it that reads nothing rejects every other value.
-func (g *gen) recordStrings(src string, arms []arm, results []*scope, sc *scope) {
+// recordArms notes the values a switch on the field at src accepts, when none of its
+// arms reads anything and its default rejects every other value (as a string read and
+// then turned into an enum does).
+func (g *gen) recordArms(src string, arms []arm, results []*scope, sc *scope) {
 	var keys []string
-	rejectsOthers := false
 	for i, a := range arms {
 		if a.isDefault {
-			rejectsOthers = kindOf(results[i]) == branchError
+			if kindOf(results[i]) != branchError {
+				return
+			}
 			continue
 		}
-		keys = append(keys, a.keys...)
+		if kindOf(results[i]) != branchError {
+			keys = append(keys, a.keys...)
+		}
 	}
-	if !rejectsOthers || len(keys) == 0 || len(g.stack) == 0 {
+	g.recordValues(src, keys, sc)
+}
+
+// recordValues notes that the field at src only takes the values keys: the Reader
+// rejects every other. ProtoDef cannot say so; the test uses it to make values the
+// Reader accepts.
+func (g *gen) recordValues(src string, keys []string, sc *scope) {
+	if len(keys) == 0 || len(g.stack) == 0 {
 		return
 	}
 	for _, k := range keys {
-		if _, err := strconv.ParseFloat(k, 64); err == nil || k == "true" || k == "false" {
+		if k == "true" || k == "false" {
 			return
 		}
 	}
-	ref, ok := g.ref(src, sc)
-	if !ok || ref == "" {
+	// The test finds the field by its name in the type being built, wherever in the type
+	// (and in whichever scope of the walk) it is.
+	_, name, _ := sc.owner(src)
+	if name == "" {
 		return
 	}
-	// Only a field of the container itself has a name the test can match.
-	for _, c := range ref {
-		if c == '/' {
-			return
-		}
-	}
 	typ := g.stack[len(g.stack)-1]
-	if g.stringValues[typ] == nil {
-		g.stringValues[typ] = map[string][]string{}
+	if g.values[typ] == nil {
+		g.values[typ] = map[string][]string{}
 	}
-	g.stringValues[typ][ref] = keys
+	g.values[typ][name] = keys
 }

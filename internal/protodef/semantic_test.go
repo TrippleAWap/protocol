@@ -266,6 +266,50 @@ func (c *comparer) value(t any, sv any, gv reflect.Value, path string) {
 			}
 		}
 		c.value(opts["type"], sv, gv, path)
+	case "option":
+		// protocol.Optional keeps whether it is set and the value in unexported fields.
+		set, val := gv.FieldByName("set"), gv.FieldByName("val")
+		if gv.Kind() != reflect.Struct || !set.IsValid() || !val.IsValid() {
+			return
+		}
+		if sv == nil {
+			if set.Bool() {
+				c.fail(path, "schema decodes no value, the Reader stored one")
+			}
+			return
+		}
+		if !set.Bool() {
+			c.fail(path, "schema decodes a value, the Reader stored none")
+			return
+		}
+		c.value(arg, sv, val, path)
+	case "switch":
+		// A field whose type depends on another: one of the types must give the value.
+		opts, _ := arg.(map[string]any)
+		cases, _ := opts["fields"].(map[string]any)
+		candidates := make([]any, 0, len(cases)+1)
+		for _, k := range keysOf(cases) {
+			candidates = append(candidates, cases[k])
+		}
+		if d, ok := opts["default"]; ok {
+			candidates = append(candidates, d)
+		}
+		var first []string
+		for _, ct := range candidates {
+			if ct == "void" {
+				// void would match any value without comparing it.
+				continue
+			}
+			sub := &comparer{in: c.in, goFields: c.goFields, converted: c.converted}
+			sub.value(ct, sv, gv, path)
+			if len(sub.errs) == 0 {
+				return
+			}
+			if first == nil {
+				first = sub.errs
+			}
+		}
+		c.errs = append(c.errs, first...)
 	case "array":
 		opts, _ := arg.(map[string]any)
 		items, _ := sv.([]any)
