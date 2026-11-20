@@ -46,7 +46,7 @@ go get github.com/helix-bedrock/protocol
 | [`nbt`](nbt) | Network and little-endian NBT |
 | [`conn`](conn) | Packet connections over Helix [raknet](https://github.com/helix-bedrock/raknet) and [nethernet](https://github.com/helix-bedrock/nethernet): batching, compression, encryption, hooks |
 | [`version`](version) | The `Protocol` interface for older Minecraft versions, `Latest`, and `Set`. Adapters live in their own repo |
-| [`cmd/protodef`](cmd/protodef) | Writes a ProtoDef schema of every packet, in the `protocol.json` format of minecraft-data: `go run ./cmd/protodef -o protocol.json` |
+| [`cmd/protodef`](cmd/protodef) | Writes a ProtoDef schema of every packet, in the `protocol.json` format of minecraft-data. The current one is [`schema/protocol.json`](schema/protocol.json), regenerated on every push to `main` |
 
 ## Roadmap
 

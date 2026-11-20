@@ -1,0 +1,87 @@
+name: ProtoDef schema
+
+# schema/protocol.json is generated from the Marshal methods by cmd/protodef. Pull
+# requests check that it still generates and show how it changes; every push to main
+# regenerates it and commits it when it changed, so it never goes stale.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Generate (check)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Test the generator
+        # Checks the schema against the Reader and Writer for every packet.
+        run: go test -count=1 ./internal/protodef
+      - name: Generate the schema
+        # Fails when the generator meets code it cannot turn into ProtoDef.
+        run: go run ./cmd/protodef -o schema/protocol.json
+      - name: Summarise the change
+        run: |
+          {
+            echo "## ProtoDef schema"
+            if git diff --quiet -- schema/protocol.json; then
+              echo "No change to schema/protocol.json."
+            else
+              echo "schema/protocol.json changes with this pull request (it is committed on main after merging):"
+              echo '```diff'
+              git diff -- schema/protocol.json | head -n 300
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: protocol.json
+          path: schema/protocol.json
+
+  update:
+    name: Generate and commit
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # One update at a time, so two pushes in a row cannot race to push the schema.
+    concurrency:
+      group: protodef-schema-main
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Test the generator
+        # A schema that does not match the Reader and Writer is not committed.
+        run: go test -count=1 ./internal/protodef
+      - name: Generate the schema
+        run: go run ./cmd/protodef -o schema/protocol.json
+      - name: Commit it if it changed
+        # A commit pushed with GITHUB_TOKEN does not start other workflows, so this
+        # cannot loop.
+        run: |
+          if git diff --quiet -- schema/protocol.json; then
+            echo "schema/protocol.json is up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
+          git add schema/protocol.json
+          git commit -m "schema: Regenerate protocol.json"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: protocol.json
+          path: schema/protocol.json
