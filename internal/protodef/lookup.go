@@ -1,6 +1,7 @@
 package protodef
 
 import (
+	"fmt"
 	"go/ast"
 	"go/constant"
 	"go/token"
@@ -88,6 +89,7 @@ func (g *gen) lookupTable(fn *types.Func) *lookupTable {
 		return nil
 	}
 	t := &lookupTable{types: map[string]types.Type{}, returns: returns, consts: map[string]*types.Const{}}
+	var unseen []token.Pos
 	for _, s := range sw.Body.List {
 		cc, ok := s.(*ast.CaseClause)
 		if !ok {
@@ -111,6 +113,14 @@ func (g *gen) lookupTable(fn *types.Func) *lookupTable {
 			}
 		}
 		if concrete == nil {
+			if !onlyReturnsFalse(cc.Body) {
+				unseen = append(unseen, cc.Pos())
+			}
+			continue
+		}
+		if cc.List == nil {
+			// A default case that picks a type: the switch would need a default.
+			unseen = append(unseen, cc.Pos())
 			continue
 		}
 		for _, k := range cc.List {
@@ -127,8 +137,26 @@ func (g *gen) lookupTable(fn *types.Func) *lookupTable {
 	if len(t.keys) == 0 {
 		return nil
 	}
+	// Report these only now, so that other func(id, *I) bool functions stay quiet. A case
+	// left out would just be missing from the switch of the polymorphic value.
+	for _, pos := range unseen {
+		g.diags = append(g.diags, fmt.Sprintf("%s: case of lookup %s without a concrete type the generator can see (*x = &T{} or return &T{}, ...)", g.p.fset.Position(pos), fn.Name()))
+	}
 	g.lookups[fn] = t
 	return t
+}
+
+// onlyReturnsFalse reports whether a case body only rejects the value.
+func onlyReturnsFalse(body []ast.Stmt) bool {
+	if len(body) != 1 {
+		return false
+	}
+	ret, ok := body[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) == 0 {
+		return false
+	}
+	id, ok := ret.Results[len(ret.Results)-1].(*ast.Ident)
+	return ok && id.Name == "false"
 }
 
 func constKey(v constant.Value) string {

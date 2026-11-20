@@ -91,7 +91,11 @@ func (g *gen) stmt(s ast.Stmt, e *env, sc *scope) bool {
 		if len(probe.fields) > 0 {
 			g.diag(sc, s.Pos(), "type switch that reads fields")
 		}
-	case *ast.IncDecStmt, *ast.BranchStmt, *ast.EmptyStmt, *ast.DeferStmt, *ast.GoStmt, *ast.SendStmt:
+	case *ast.BranchStmt:
+		// break, continue, goto and fallthrough make which reads run depend on values,
+		// which the walk does not follow.
+		g.diag(sc, s.Pos(), "%s changes which reads run", s.Tok)
+	case *ast.IncDecStmt, *ast.EmptyStmt, *ast.DeferStmt, *ast.GoStmt, *ast.SendStmt:
 	default:
 		g.diag(sc, s.Pos(), "unsupported statement %T", s)
 	}
@@ -113,6 +117,7 @@ func (g *gen) exprCalls(x ast.Expr, e *env, sc *scope) {
 
 // call runs one call.
 func (g *gen) call(c *ast.CallExpr, e *env, sc *scope) {
+	g.visited[c] = true
 	fun := unparen(c.Fun)
 	// Explicit instantiations such as SliceOfLen[T, S, A](...).
 	switch f := fun.(type) {
@@ -190,6 +195,7 @@ func (g *gen) body(fn *types.Func, binds map[int]*binding, sc *scope, ioName str
 			i++
 		}
 	}
+	g.entered[decl.Body] = true
 	g.stmts(decl.Body.List, e, sc)
 }
 
@@ -257,6 +263,7 @@ func (g *gen) inlineLit(fl *ast.FuncLit, litEnv *env, args []ast.Expr, callEnv *
 			i++
 		}
 	}
+	g.entered[fl.Body] = true
 	g.stmts(fl.Body.List, e, sc)
 }
 
@@ -322,5 +329,6 @@ func (g *gen) inlineLitPlace(fl *ast.FuncLit, litEnv *env, place string, sc *sco
 			}
 		}
 	}
+	g.entered[fl.Body] = true
 	g.stmts(fl.Body.List, e, sc)
 }

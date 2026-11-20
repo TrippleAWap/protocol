@@ -2,6 +2,7 @@ package protodef
 
 import (
 	"fmt"
+	"go/ast"
 	"go/token"
 	"go/types"
 	"strconv"
@@ -40,6 +41,11 @@ type gen struct {
 	// goFields maps a type name, then the Go field path a field of the type is read
 	// into, to that field. The test uses it to compare values with the Go structs.
 	goFields map[string]map[string]*Field
+	// visited holds every call the walk ran, and entered every body it walked. A call
+	// in an entered body that reads from the IO but was never run is code the walk
+	// skipped (see skippedCalls).
+	visited map[*ast.CallExpr]bool
+	entered map[*ast.BlockStmt]bool
 }
 
 // diag reports code at pos that the generator cannot turn into ProtoDef.
@@ -190,4 +196,39 @@ func (g *gen) collect(sc *scope, run func(*scope)) any {
 		return "void"
 	}
 	return container(probe.fields)
+}
+
+// isIOType reports whether t is protocol.IO or *protocol.Reader.
+func (g *gen) isIOType(t types.Type) bool {
+	return t != nil && (types.Identical(t, g.ioType) || types.Identical(t, g.reader))
+}
+
+// skippedCalls reports the calls that read from the IO in a body the walk entered, but
+// that it never ran: code in a statement or expression the walk does not follow, such
+// as a defer or a call inside a composite literal. Without this the schema would just
+// lack the fields they read.
+func (g *gen) skippedCalls() {
+	for body := range g.entered {
+		// Function literals are included: one the walk never ran (passed to a function it
+		// does not follow) has reads that are missing too.
+		ast.Inspect(body, func(n ast.Node) bool {
+			c, ok := n.(*ast.CallExpr)
+			if !ok || g.visited[c] {
+				return true
+			}
+			reads := false
+			if sel, ok := unparen(c.Fun).(*ast.SelectorExpr); ok && g.isIOType(g.p.info.TypeOf(sel.X)) && !isIOIgnored(sel.Sel.Name) {
+				reads = true
+			}
+			for _, a := range c.Args {
+				if g.isIOType(g.p.info.TypeOf(a)) {
+					reads = true
+				}
+			}
+			if reads {
+				g.diags = append(g.diags, fmt.Sprintf("%s: call %s is never run by the walk", g.p.fset.Position(c.Pos()), types.ExprString(c)))
+			}
+			return true
+		})
+	}
 }

@@ -2,6 +2,7 @@ package protodef
 
 import (
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
 )
@@ -59,6 +60,9 @@ func (g *gen) ioCall(name string, c *ast.CallExpr, e *env, sc *scope) {
 // ioMethodType returns the type that the IO method name reads, for methods in the IO
 // interface. It reports false for Reader methods outside it.
 func (g *gen) ioMethodType(name string, args []ast.Expr, sc *scope, pos token.Pos) (any, bool) {
+	if name == "Bitset" {
+		g.checkBitset(args, sc, pos)
+	}
 	if t, ok := ioPrimitive(name); ok {
 		return t, true
 	}
@@ -92,7 +96,12 @@ func (g *gen) ioMethodType(name string, args []ast.Expr, sc *scope, pos token.Po
 		return nil, false
 	}
 	// A Reader method: the receiver is the IO, the first argument the value read.
-	return g.namedBody(fn, name, map[int]*binding{-1: {io: true}, 0: {place: "$"}}), true
+	t := g.namedBody(fn, name, map[int]*binding{-1: {io: true}, 0: {place: "$"}})
+	if g.emptyType(t) {
+		// Such as a new method reading raw bytes, or a primitive renamed.
+		g.diag(sc, pos, "Reader.%s reads nothing the generator can follow: add it to ioPrimitive or overrides", name)
+	}
+	return t, true
 }
 
 func (g *gen) readerMethod(name string) *types.Func {
@@ -116,6 +125,11 @@ func (g *gen) inIOInterface(name string) bool {
 
 // methodCall runs a call of a method on a value that is not the IO.
 func (g *gen) methodCall(fn *types.Func, recv ast.Expr, c *ast.CallExpr, e *env, sc *scope) {
+	if !g.hasIOArg(c, e) && g.holdsIO(g.p.info.TypeOf(recv)) {
+		// Such as reader{r: io}.next(): its reads are not followed.
+		g.diag(sc, c.Pos(), "method %s of a value holding the IO", fn.Name())
+		return
+	}
 	if !g.hasIOArg(c, e) {
 		for _, a := range c.Args {
 			g.exprCalls(a, e, sc)
@@ -188,6 +202,11 @@ func (g *gen) funcCall(fn *types.Func, c *ast.CallExpr, e *env, sc *scope) {
 		g.diag(sc, c.Pos(), "call of %s from another package", fn.FullName())
 		return
 	}
+	if sig, ok := fn.Type().(*types.Signature); ok && sig.TypeParams().Len() > 0 {
+		// Walking a generic body fails deep inside it; say what to do instead.
+		g.diag(sc, c.Pos(), "generic helper %s is not known: add it to helper in helpers.go", fn.Name())
+		return
+	}
 	// A helper of the form func(IO, *T, ...) reads a T: a type of its own.
 	sig, ok := fn.Type().(*types.Signature)
 	if ok && sig.Params().Len() >= 2 && len(c.Args) >= 2 && g.isIO(c.Args[0], e) {
@@ -225,4 +244,46 @@ func (g *gen) emptyType(name string) bool {
 func isBasic(t types.Type) bool {
 	_, ok := t.Underlying().(*types.Basic)
 	return ok
+}
+
+// maxVarint128Bits is the most bits node-protodef's varint128 reads: 19 groups of 7.
+const maxVarint128Bits = 133
+
+// checkBitset reports a Bitset wider than varint128 can hold. The width grows with new
+// entity flags; the Reader reads ceil(size/7) bytes.
+func (g *gen) checkBitset(args []ast.Expr, sc *scope, pos token.Pos) {
+	if len(args) < 2 {
+		// A method value, as in OptionalFunc(io, &x, io.Bitset): the size is not known.
+		g.diag(sc, pos, "Bitset without a constant size")
+		return
+	}
+	v := g.p.info.Types[args[1]].Value
+	size, ok := constant.Int64Val(v)
+	if v == nil || !ok {
+		g.diag(sc, pos, "Bitset size %s is not a constant", types.ExprString(args[1]))
+		return
+	}
+	if (size+6)/7*7 > maxVarint128Bits {
+		g.diag(sc, pos, "Bitset of %d bits is wider than varint128 (%d bits)", size, maxVarint128Bits)
+	}
+}
+
+// holdsIO reports whether t is a struct (or a pointer to one) with a field of the IO.
+func (g *gen) holdsIO(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	if p, ok := t.Underlying().(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	st, ok := t.Underlying().(*types.Struct)
+	if !ok || types.Identical(types.NewPointer(t), g.reader) {
+		return false
+	}
+	for i := 0; i < st.NumFields(); i++ {
+		if g.isIOType(st.Field(i).Type()) {
+			return true
+		}
+	}
+	return false
 }

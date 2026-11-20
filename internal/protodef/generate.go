@@ -66,6 +66,8 @@ func Generate(dir string) (*Schema, error) {
 		inlining:     map[*types.Func]bool{},
 		stringValues: map[string]map[string][]string{},
 		overrides:    overrides(),
+		visited:      map[*ast.CallExpr]bool{},
+		entered:      map[*ast.BlockStmt]bool{},
 		consts:       map[*Field]map[*types.Const]bool{},
 		goFields:     map[string]map[string]*Field{},
 	}
@@ -104,6 +106,7 @@ func Generate(dir string) (*Schema, error) {
 	}
 
 	g.applyMappers()
+	g.skippedCalls()
 
 	out := NewMap()
 	for _, n := range declaredNatives() {
@@ -186,11 +189,15 @@ func (g *gen) packets() ([]Packet, error) {
 					}
 					goName := packetTypeName(kv.Value)
 					if goName == "" {
+						// The packet would be missing from the schema.
+						g.diags = append(g.diags, fmt.Sprintf("%s: packet pool entry not of the form func() Packet { return &T{} }", g.p.fset.Position(kv.Value.Pos())))
 						continue
 					}
 					id := uint32(id64)
-					if _, seen := byID[id]; !seen {
+					if pk, seen := byID[id]; !seen {
 						byID[id] = &Packet{ID: id, Name: snake(goName), GoName: goName}
+					} else if pk.GoName != goName {
+						g.diags = append(g.diags, fmt.Sprintf("%s: packet ID %d is %s in one pool and %s in another", g.p.fset.Position(kv.Pos()), id, pk.GoName, goName))
 					}
 				}
 				return true

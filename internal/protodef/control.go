@@ -103,6 +103,29 @@ func child(sc *scope, level bool) *scope {
 	return c
 }
 
+// mentionsField reports whether x uses a value read into a field before.
+func (g *gen) mentionsField(x ast.Expr, e *env, sc *scope) bool {
+	found := false
+	ast.Inspect(x, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch n := n.(type) {
+		case *ast.Ident, *ast.SelectorExpr:
+			if p, ok := g.place(n.(ast.Expr), e); ok {
+				if _, ok := g.ref(p, sc); ok {
+					found = true
+				}
+			}
+		case *ast.CallExpr:
+			// A call such as len(x) or lookup(id, x) is not the value of a field.
+			return false
+		}
+		return !found
+	})
+	return found
+}
+
 // dryRun runs list in a scope that is thrown away, to see what it does.
 func (g *gen) dryRun(list []ast.Stmt, e *env, sc *scope) *scope {
 	p := child(sc, true)
@@ -241,6 +264,10 @@ func (g *gen) ifStmt(s *ast.IfStmt, rest []ast.Stmt, e *env, sc *scope) (consume
 	}
 	if !ok {
 		if thenKind != branchIO {
+			if g.mentionsField(s.Cond, e, sc) {
+				// Such as flags&mask != 0 or x < 10: ProtoDef cannot branch on it.
+				g.diag(sc, s.Pos(), "condition %s on a field read before is not a comparison with constants", types.ExprString(s.Cond))
+			}
 			// A guard on a value that is not on the wire, such as a nil check.
 			g.stmts(elseList, e, sc)
 			return consumed, term
