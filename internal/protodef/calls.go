@@ -84,16 +84,15 @@ func (g *gen) ioMethodType(name string, args []ast.Expr, sc *scope, pos token.Po
 		g.diag(sc, pos, "NBT encoding %q", enc)
 		return "nbt", true
 	}
-	if o, ok := overrides()[name]; ok {
+	if o, ok := g.overrides[name]; ok {
 		return g.fixedType("override:"+name, name, func() any { return o(g) }), true
 	}
 	fn := g.readerMethod(name)
 	if fn == nil || !g.inIOInterface(name) {
 		return nil, false
 	}
-	return g.namedType(fn, name, func(nsc *scope) {
-		g.body(fn, map[int]*binding{-1: {io: true}, 0: {place: "$"}}, nsc, "")
-	}), true
+	// A Reader method: the receiver is the IO, the first argument the value read.
+	return g.namedBody(fn, name, map[int]*binding{-1: {io: true}, 0: {place: "$"}}), true
 }
 
 func (g *gen) readerMethod(name string) *types.Func {
@@ -147,7 +146,7 @@ func (g *gen) methodCall(fn *types.Func, recv ast.Expr, c *ast.CallExpr, e *env,
 // dynamicCall reads an interface value whose concrete type was picked by a lookup
 // function from a field read before.
 func (g *gen) dynamicCall(place string, c *ast.CallExpr, sc *scope) {
-	d, _ := g.dyn(place, sc)
+	d := g.dyn(place, sc)
 	if d == nil {
 		g.diag(sc, c.Pos(), "interface value %s read without a known type", place)
 		return

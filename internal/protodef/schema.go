@@ -5,9 +5,10 @@
 // as the Reader runs them: each IO call becomes a field, helpers such as Slice and
 // OptionalFunc become arrays and options, and conditions on fields read earlier
 // become switches. Fields a switch branches on get a mapper naming their values after
-// the Go constants. Only the few encodings that cannot be followed statically (the
-// item user-data sub-buffer and the stack request action variant shift) are written by
-// hand in overrides.go.
+// the Go constants. Only the few encodings that cannot be followed statically are
+// written by hand, in overrides.go: the items with their user-data sub-buffer, item
+// descriptors (whose type is sent as a string) and the stack request action variant
+// shift.
 //
 // The tests check the schema against the Reader and Writer for every packet: random
 // values encoded with the schema must be read by the Reader with no bytes left over and
@@ -32,9 +33,13 @@ import (
 
 // Field is one field of a ProtoDef container.
 type Field struct {
+	// Name is the field's name, empty for an anonymous field.
 	Name string `json:"name,omitempty"`
-	Anon bool   `json:"anon,omitempty"`
-	Type any    `json:"type"`
+	// Anon is set for a switch whose case containers are merged into the parent
+	// container, as ProtoDef's anon does.
+	Anon bool `json:"anon,omitempty"`
+	// Type is the field's type: a type name, or a list such as ["array", {...}].
+	Type any `json:"type"`
 }
 
 // Map is a JSON object that keeps the insertion order of its keys.

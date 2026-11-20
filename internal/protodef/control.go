@@ -103,21 +103,24 @@ func child(sc *scope, level bool) *scope {
 	return c
 }
 
-// probe runs list in a scope that is thrown away, to see what it reads.
+// dryRun runs list in a scope that is thrown away, to see what it does.
+func (g *gen) dryRun(list []ast.Stmt, e *env, sc *scope) *scope {
+	p := child(sc, true)
+	g.stmts(list, newEnv(e), p)
+	return p
+}
+
+// probe reports what list reads.
 func (g *gen) probe(list []ast.Stmt, e *env, sc *scope) branchKind {
 	if len(list) == 0 {
 		return branchVoid
 	}
-	p := child(sc, true)
-	g.stmts(list, newEnv(e), p)
-	return kindOf(p)
+	return kindOf(g.dryRun(list, e, sc))
 }
 
 // decidesType reports whether list records the concrete type of an interface value.
 func (g *gen) decidesType(list []ast.Stmt, e *env, sc *scope) bool {
-	p := child(sc, true)
-	g.stmts(list, newEnv(e), p)
-	return len(p.dyn) > 0
+	return len(g.dryRun(list, e, sc).dyn) > 0
 }
 
 // containsReturn reports whether list has a return statement, outside function literals
@@ -217,9 +220,6 @@ func (g *gen) ifStmt(s *ast.IfStmt, rest []ast.Stmt, e *env, sc *scope) (consume
 		g.stmts(elseList, e, sc)
 		return consumed, term
 	}
-	inline := func(list []ast.Stmt) {
-		g.stmts(list, e, sc)
-	}
 	arms := []arm{{keys: t.keys, list: thenList}, {isDefault: true, list: elseList}}
 	if t.neg {
 		arms = []arm{{keys: t.keys, list: elseList}, {isDefault: true, list: thenList}}
@@ -233,20 +233,20 @@ func (g *gen) ifStmt(s *ast.IfStmt, rest []ast.Stmt, e *env, sc *scope) (consume
 		}
 		return consumed, term
 	case thenKind == branchError:
-		inline(elseList)
+		g.stmts(elseList, e, sc)
 		return consumed, term
 	case elseKind == branchError:
-		inline(thenList)
+		g.stmts(thenList, e, sc)
 		return consumed, term
 	}
 	if !ok {
 		if thenKind != branchIO {
 			// A guard on a value that is not on the wire, such as a nil check.
-			inline(elseList)
+			g.stmts(elseList, e, sc)
 			return consumed, term
 		}
-		g.diag(sc, s.Pos(), "condition %s is not on a field read before", g.src(s.Cond))
-		inline(thenList)
+		g.diag(sc, s.Pos(), "condition %s is not on a field read before", types.ExprString(s.Cond))
+		g.stmts(thenList, e, sc)
 		return consumed, term
 	}
 	g.emitArms(t.ref, t.place, arms, e, sc)
@@ -382,7 +382,7 @@ func (g *gen) switchStmt(s *ast.SwitchStmt, e *env, sc *scope) {
 		for _, k := range cc.List {
 			v := g.p.info.Types[k].Value
 			if v == nil {
-				g.diag(sc, k.Pos(), "case %s is not a constant", g.src(k))
+				g.diag(sc, k.Pos(), "case %s is not a constant", types.ExprString(k))
 				continue
 			}
 			a.keys = append(a.keys, constKey(v))
@@ -409,7 +409,7 @@ func (g *gen) switchStmt(s *ast.SwitchStmt, e *env, sc *scope) {
 	if !ok {
 		for _, a := range arms {
 			if g.probe(a.list, e, sc) == branchIO {
-				g.diag(sc, s.Pos(), "switch on %s, which is not a field read before", g.src(s.Tag))
+				g.diag(sc, s.Pos(), "switch on %s, which is not a field read before", types.ExprString(s.Tag))
 				return
 			}
 		}
@@ -455,12 +455,12 @@ func (g *gen) forStmt(s *ast.ForStmt, e *env, sc *scope) {
 	}
 	limit := loopLimit(s.Cond)
 	if limit == nil {
-		g.diag(sc, s.Pos(), "loop condition %s", g.src(s.Cond))
+		g.diag(sc, s.Pos(), "loop condition %s", types.ExprString(s.Cond))
 		return
 	}
 	count, ok := g.countRef(limit, inner, sc)
 	if !ok {
-		g.diag(sc, s.Pos(), "loop count %s is not a field read before", g.src(limit))
+		g.diag(sc, s.Pos(), "loop count %s is not a field read before", types.ExprString(limit))
 		return
 	}
 	g.loop(count, s.Body.List, inner, sc)
@@ -523,7 +523,7 @@ func (g *gen) rangeStmt(s *ast.RangeStmt, e *env, sc *scope) {
 		return
 	}
 	if count == nil {
-		g.diag(sc, s.Pos(), "range over %s, which has no fixed length", g.src(s.X))
+		g.diag(sc, s.Pos(), "range over %s, which has no fixed length", types.ExprString(s.X))
 		return
 	}
 	g.loop(count, s.Body.List, inner, sc)
@@ -550,8 +550,4 @@ func (g *gen) loop(count any, body []ast.Stmt, e *env, sc *scope) {
 		name = placeName(slices[0])
 	}
 	sc.fields = append(sc.fields, &Field{Name: sc.uniq(name), Type: arrayCount(count, elem)})
-}
-
-func (g *gen) src(x ast.Expr) string {
-	return types.ExprString(x)
 }

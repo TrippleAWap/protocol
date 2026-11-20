@@ -1,7 +1,6 @@
 package protodef
 
 import (
-	"go/token"
 	"go/types"
 	"strconv"
 )
@@ -95,7 +94,7 @@ func overrides() map[string]func(g *gen) any {
 					} else if id >= placeIn {
 						continue
 					}
-					fields.Set(strconv.Itoa(variant), g.marshalerType(t.types[k], g.scratch(), token.NoPos))
+					fields.Set(strconv.Itoa(variant), g.topMarshalerType(t.types[k]))
 				}
 			} else {
 				g.diags = append(g.diags, "protodef: lookupStackRequestAction or StackRequestActionPlaceInContainer not found")
@@ -143,7 +142,7 @@ func (g *gen) rootMarshaler(name string) any {
 		g.diags = append(g.diags, "protodef: no type "+name)
 		return "void"
 	}
-	return g.marshalerType(o.Type(), g.scratch(), token.NoPos)
+	return g.topMarshalerType(o.Type())
 }
 
 func (g *gen) rootConst(name string) int {
@@ -156,13 +155,6 @@ func (g *gen) rootConst(name string) int {
 		return -1
 	}
 	return n
-}
-
-// scratch returns a scope whose diagnostics go straight to g.
-func (g *gen) scratch() *scope {
-	sc := newScope(nil, true)
-	g.pending = append(g.pending, sc)
-	return sc
 }
 
 // mapOf makes a Map from keys and values in turn: mapOf("a", 1, "b", 2).

@@ -91,7 +91,7 @@ func (g *gen) countedHelper(c *ast.CallExpr, l, x, f ast.Expr, e *env, sc *scope
 	}
 	count, ok := g.countRef(l, e, sc)
 	if !ok {
-		g.diag(sc, c.Pos(), "slice length %s is not a field read before", g.src(l))
+		g.diag(sc, c.Pos(), "slice length %s is not a field read before", types.ExprString(l))
 		return
 	}
 	var elem any

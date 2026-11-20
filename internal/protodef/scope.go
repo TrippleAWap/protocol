@@ -132,30 +132,39 @@ func (sc *scope) uniq(name string) string {
 	return name + "_" + strconv.Itoa(n+1)
 }
 
-// ref returns the ProtoDef path of the field holding place, as seen from sc.
-func (g *gen) ref(place string, sc *scope) (string, bool) {
+// owner returns the innermost scope from sc up that knows place, the name of its field
+// there ("" when the place is not a wire field any more), and how many containers lie
+// between sc and that scope.
+func (sc *scope) owner(place string) (*scope, string, int) {
 	up := 0
 	for s := sc; s != nil; s = s.parent {
 		if name, ok := s.places[place]; ok {
-			if name == "" {
-				return "", false
-			}
-			return strings.Repeat("../", up) + name, true
+			return s, name, up
 		}
 		if s.level {
 			up++
 		}
 	}
-	return "", false
+	return nil, "", 0
 }
 
-func (g *gen) dyn(place string, sc *scope) (*dynamic, *scope) {
+// ref returns the ProtoDef path of the field holding place, as seen from sc.
+func (g *gen) ref(place string, sc *scope) (string, bool) {
+	_, name, up := sc.owner(place)
+	if name == "" {
+		return "", false
+	}
+	return strings.Repeat("../", up) + name, true
+}
+
+// dyn returns what decides the concrete type of the interface value at place.
+func (g *gen) dyn(place string, sc *scope) *dynamic {
 	for s := sc; s != nil; s = s.parent {
 		if d, ok := s.dyn[place]; ok {
-			return d, s
+			return d
 		}
 	}
-	return nil, nil
+	return nil
 }
 
 // commit moves the places, dynamic types and diagnostics of a finished child scope into
@@ -202,10 +211,7 @@ func (g *gen) countRef(x ast.Expr, e *env, sc *scope) (any, bool) {
 	}
 	// The compiled array code has locals of these names, and the compiler renames fields
 	// called value, size and the like: give the field a name that is pasted as is.
-	for s := sc; s != nil; s = s.parent {
-		if _, owns := s.places[p]; !owns {
-			continue
-		}
+	if s, _, _ := sc.owner(p); s != nil {
 		for _, f := range s.fields {
 			if f.Name == r && !f.Anon {
 				f.Name = s.uniq("length")
@@ -217,7 +223,6 @@ func (g *gen) countRef(x ast.Expr, e *env, sc *scope) (any, bool) {
 				return f.Name, true
 			}
 		}
-		break
 	}
 	g.diag(sc, x.Pos(), "array count field %q cannot be renamed", r)
 	return r, true

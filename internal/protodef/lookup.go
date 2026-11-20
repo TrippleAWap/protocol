@@ -53,7 +53,7 @@ func (g *gen) lookupTable(fn *types.Func) *lookupTable {
 		return t
 	}
 	g.lookups[fn] = nil
-	decl, ok := g.p.funcs[fn]
+	decl, ok := g.p.funcs[fn.Origin()]
 	if !ok {
 		return nil
 	}

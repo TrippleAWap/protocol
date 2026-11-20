@@ -224,13 +224,8 @@ func (g *gen) alias(lhs, rhs ast.Expr, e *env, sc *scope) {
 	if !ok1 || !ok2 {
 		return
 	}
-	for s := sc; s != nil; s = s.parent {
-		if name, ok := s.places[rp]; ok {
-			if name != "" {
-				s.places[lp] = name
-			}
-			return
-		}
+	if s, name, _ := sc.owner(rp); name != "" {
+		s.places[lp] = name
 	}
 }
 
@@ -246,7 +241,7 @@ func isReference(t types.Type) bool {
 	return false
 }
 
-// isPlaceExpr reports whether x is a selector or index chain (a copy of a field).
+// isPlaceExpr reports whether x is a field selector or a dereference.
 func isPlaceExpr(x ast.Expr) bool {
 	switch unparen(x).(type) {
 	case *ast.SelectorExpr:
@@ -256,5 +251,3 @@ func isPlaceExpr(x ast.Expr) bool {
 	}
 	return false
 }
-
-func isIdent(x ast.Expr) bool { _, ok := unparen(x).(*ast.Ident); return ok }

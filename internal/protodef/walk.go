@@ -48,7 +48,7 @@ func (g *gen) stmt(s ast.Stmt, e *env, sc *scope) bool {
 				g.bind(l, s.Rhs[i], e, s.Tok == token.DEFINE)
 				if v := g.p.info.Types[s.Rhs[i]].Value; v != nil {
 					g.setConst(l, v, e, sc)
-				} else if s.Tok == token.ASSIGN && !isIdent(l) {
+				} else if _, isLocal := unparen(l).(*ast.Ident); s.Tok == token.ASSIGN && !isLocal {
 					g.alias(l, s.Rhs[i], e, sc)
 				}
 			}
@@ -226,6 +226,8 @@ func (g *gen) inlineFunc(fn *types.Func, recv ast.Expr, args []ast.Expr, e *env,
 			binds[-1] = b
 		}
 	} else {
+		// No receiver: a Reader method called on the IO (such as EventType), whose
+		// receiver is the IO, or a function, for which body ignores this binding.
 		binds[-1] = &binding{io: true}
 	}
 	for i, a := range args {
@@ -277,9 +279,7 @@ func (g *gen) funcValueType(f ast.Expr, place string, e *env, sc *scope) any {
 				break
 			}
 			// A method of a context value, such as CommandEnumContext.Marshal(IO, *T).
-			return g.namedType(fn, typeName(fn), func(nsc *scope) {
-				g.body(fn, map[int]*binding{0: {io: true}, 1: {place: "$"}}, nsc, "")
-			})
+			return g.namedBody(fn, typeName(fn), argumentBinds())
 		}
 		if fn, ok := g.p.info.Uses[x.Sel].(*types.Func); ok {
 			return g.funcType(fn)

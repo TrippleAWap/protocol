@@ -14,7 +14,7 @@ type gen struct {
 	ioType types.Type
 	reader types.Type
 
-	// named holds the shared types in the order they were first used.
+	// named holds the shared types. Generate writes them sorted by name.
 	named *Map
 	// names maps the object a named type comes from to its name.
 	names map[any]string
@@ -28,30 +28,33 @@ type gen struct {
 	diags []string
 	// stack holds the names of the types being built.
 	stack []string
-	// strings maps type name, then field name, to the only strings the Reader accepts.
-	strings map[string]map[string][]string
-	// consts holds the constants each field is compared with, and uses the switches on
-	// fields, to give those fields mappers (see mapper.go).
+	// stringValues maps type name, then field name, to the only strings the Reader
+	// accepts.
+	stringValues map[string]map[string][]string
+	// consts holds the constants each field is compared with (see mapper.go).
 	consts map[*Field]map[*types.Const]bool
-	uses   []switchUse
+	// uses holds every switch on a field, whose keys applyMappers renames.
+	uses []switchUse
+	// overrides holds the hand-written IO method types of overrides.go.
+	overrides map[string]func(g *gen) any
 	// goFields maps a type name, then the Go field path a field of the type is read
 	// into, to that field. The test uses it to compare values with the Go structs.
 	goFields map[string]map[string]*Field
-	// pending holds scopes made outside any type, whose diagnostics are added at the end.
-	pending []*scope
 }
 
+// diag reports code at pos that the generator cannot turn into ProtoDef.
 func (g *gen) diag(sc *scope, pos token.Pos, format string, args ...any) {
 	sc.diags = append(sc.diags, fmt.Sprintf("%s: %s", g.p.fset.Position(pos), fmt.Sprintf(format, args...)))
 }
 
-// named returns the name of the shared type made by build for key, building it the
-// first time. The name is reserved before building, so recursive types refer to it.
-func (g *gen) namedType(key any, name string, build func(sc *scope)) string {
+// reserve returns the name of the shared type for key. It reports false when the type
+// exists already; otherwise it takes a free name based on base (a Go type of another
+// package can have the same name).
+func (g *gen) reserve(key any, base string) (string, bool) {
 	if n, ok := g.names[key]; ok {
-		return n
+		return n, false
 	}
-	base := name
+	name := base
 	for i := 2; ; i++ {
 		if _, taken := g.owners[name]; !taken {
 			break
@@ -60,6 +63,16 @@ func (g *gen) namedType(key any, name string, build func(sc *scope)) string {
 	}
 	g.names[key] = name
 	g.owners[name] = key
+	return name, true
+}
+
+// namedType returns the name of the shared type made by build for key, building it the
+// first time. The name is set before building, so recursive types refer to it.
+func (g *gen) namedType(key any, name string, build func(sc *scope)) string {
+	name, ok := g.reserve(key, name)
+	if !ok {
+		return name
+	}
 	g.named.Set(name, nil)
 	sc := newScope(nil, true)
 	g.stack = append(g.stack, name)
@@ -72,21 +85,27 @@ func (g *gen) namedType(key any, name string, build func(sc *scope)) string {
 
 // fixedType registers a type that is written by hand.
 func (g *gen) fixedType(key any, name string, build func() any) string {
-	if n, ok := g.names[key]; ok {
-		return n
+	name, ok := g.reserve(key, name)
+	if ok {
+		g.named.Set(name, build())
 	}
-	g.names[key] = name
-	g.owners[name] = key
-	g.named.Set(name, nil)
-	g.named.Set(name, build())
 	return name
 }
 
+// namedBody returns the named type read by running the body of fn with binds.
+func (g *gen) namedBody(fn *types.Func, name string, binds map[int]*binding) string {
+	return g.namedType(fn, name, func(sc *scope) { g.body(fn, binds, sc, "") })
+}
+
+// receiverBinds binds a Marshal(IO) method: the receiver is the value read.
+func receiverBinds() map[int]*binding { return map[int]*binding{-1: {place: "$"}, 0: {io: true}} }
+
+// argumentBinds binds a func(IO, *T): the second argument is the value read.
+func argumentBinds() map[int]*binding { return map[int]*binding{0: {io: true}, 1: {place: "$"}} }
+
 // methodType returns the named type read by a Marshal method.
 func (g *gen) methodType(fn *types.Func) string {
-	return g.namedType(fn, typeName(fn), func(sc *scope) {
-		g.body(fn, map[int]*binding{-1: {place: "$"}, 0: {io: true}}, sc, "")
-	})
+	return g.namedBody(fn, typeName(fn), receiverBinds())
 }
 
 // typeName names the type of a method's receiver, or a package-level function.
@@ -109,6 +128,14 @@ func exported(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// topMarshalerType is marshalerType outside any type being built.
+func (g *gen) topMarshalerType(t types.Type) any {
+	sc := newScope(nil, true)
+	typ := g.marshalerType(t, sc, token.NoPos)
+	g.diags = append(g.diags, sc.diags...)
+	return typ
 }
 
 // marshalerType returns the named type of t, read by the Marshal method of *t.
@@ -142,9 +169,7 @@ func (g *gen) funcType(fn *types.Func) string {
 	if rest, ok := strings.CutPrefix(name, "marshal"); ok && rest != "" {
 		name = rest
 	}
-	return g.namedType(fn, exported(name), func(sc *scope) {
-		g.body(fn, map[int]*binding{0: {io: true}, 1: {place: "$"}}, sc, "")
-	})
+	return g.namedBody(fn, exported(name), argumentBinds())
 }
 
 // collect builds the type read by run: void for nothing, the field's own type for one

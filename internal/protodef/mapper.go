@@ -40,20 +40,14 @@ func (g *gen) constOf(x ast.Expr) *types.Const {
 
 // fieldOf returns the field holding place, if it is a field of a container being built.
 func (g *gen) fieldOf(place string, sc *scope) *Field {
-	for s := sc; s != nil; s = s.parent {
-		name, ok := s.places[place]
-		if !ok {
-			continue
-		}
-		if name == "" {
-			return nil
-		}
-		for _, f := range s.fields {
-			if f.Name == name && !f.Anon {
-				return f
-			}
-		}
+	s, name, _ := sc.owner(place)
+	if name == "" {
 		return nil
+	}
+	for _, f := range s.fields {
+		if f.Name == name && !f.Anon {
+			return f
+		}
 	}
 	return nil
 }

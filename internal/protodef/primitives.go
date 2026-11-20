@@ -4,52 +4,71 @@ package protodef
 // follow the reader: Varint32 is a zigzag varint, Varuint32 a plain one, and every
 // fixed-width integer and float is little-endian except BEInt32.
 func ioPrimitive(name string) (any, bool) {
-	t, ok := map[string]any{
-		"Uint8":                   "u8",
-		"Int8":                    "i8",
-		"Bool":                    "bool",
-		"Uint16":                  "lu16",
-		"Int16":                   "li16",
-		"Uint32":                  "lu32",
-		"Int32":                   "li32",
-		"BEInt32":                 "i32",
-		"Uint64":                  "lu64",
-		"Int64":                   "li64",
-		"Float32":                 "lf32",
-		"Float64":                 "lf64",
-		"Varuint32":               "varint",
-		"Varint32":                "zigzag32",
-		"Varuint64":               "varint64",
-		"Varint64":                "zigzag64",
-		"ActorRuntimeID":          "varint64",
-		"ActorRuntimeIDVarint64":  "zigzag64",
-		"ActorRuntimeIDVaruint32": "varint",
-		"ActorUniqueID":           "zigzag64",
-		"ActorUniqueIDInt64":      "li64",
-		"ActorUniqueIDUint64":     "lu64",
-		"ActorUniqueIDVaruint64":  "varint64",
-		"String":                  "string",
-		"StringUTF":               "ShortString",
-		"ByteSlice":               "ByteArray",
-		"Bytes":                   "restBuffer",
-		"Vec3":                    "vec3f",
-		"Vec2":                    "vec2f",
-		"BlockPos":                "BlockCoordinates",
-		"ChunkPos":                "ChunkCoordinates",
-		"SubChunkPos":             "vec3li",
-		// SoundPos is a BlockPos holding the position times 8.
-		"SoundPos": "BlockCoordinates",
-		// ByteFloat is an angle in 1/256ths of a turn.
-		"ByteFloat": "byterot",
-		"RGB":       "ColourRGBf",
-		"RGBA":      "lu32",
-		"ARGB":      "lu32",
-		"UUID":      "uuid",
-		// Bitset is an unsigned LEB128 integer of any width. Every Bitset in the protocol
-		// is at most 131 bits wide, which varint128 reads as long as the top bits are unset.
-		"Bitset": "varint128",
-	}[name]
-	return t, ok
+	switch name {
+	case "Uint8":
+		return "u8", true
+	case "Int8":
+		return "i8", true
+	case "Bool":
+		return "bool", true
+	case "Uint16":
+		return "lu16", true
+	case "Int16":
+		return "li16", true
+	case "Uint32", "RGBA", "ARGB":
+		return "lu32", true
+	case "Int32":
+		return "li32", true
+	case "BEInt32":
+		return "i32", true
+	case "Uint64", "ActorUniqueIDUint64":
+		return "lu64", true
+	case "Int64", "ActorUniqueIDInt64":
+		return "li64", true
+	case "Float32":
+		return "lf32", true
+	case "Float64":
+		return "lf64", true
+	case "Varuint32", "ActorRuntimeIDVaruint32":
+		return "varint", true
+	case "Varint32":
+		return "zigzag32", true
+	case "Varuint64", "ActorRuntimeID", "ActorUniqueIDVaruint64":
+		return "varint64", true
+	case "Varint64", "ActorRuntimeIDVarint64", "ActorUniqueID":
+		return "zigzag64", true
+	case "String":
+		return "string", true
+	case "StringUTF":
+		return "ShortString", true
+	case "ByteSlice":
+		return "ByteArray", true
+	case "Bytes":
+		return "restBuffer", true
+	case "Vec3":
+		return "vec3f", true
+	case "Vec2":
+		return "vec2f", true
+	// SoundPos is a BlockPos holding the position times 8.
+	case "BlockPos", "SoundPos":
+		return "BlockCoordinates", true
+	case "ChunkPos":
+		return "ChunkCoordinates", true
+	case "SubChunkPos":
+		return "vec3li", true
+	// ByteFloat is an angle in 1/256ths of a turn.
+	case "ByteFloat":
+		return "byterot", true
+	case "RGB":
+		return "ColourRGBf", true
+	case "UUID":
+		return "uuid", true
+	// Bitset is an unsigned LEB128 integer of any width. Every Bitset in the protocol
+	// is at most 131 bits wide, which varint128 reads as long as the top bits are unset.
+	case "Bitset":
+		return "varint128", true
+	}
+	return nil, false
 }
 
 // isIOIgnored reports whether an IO or Reader method checks or reports but reads nothing.

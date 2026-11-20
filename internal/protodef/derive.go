@@ -154,8 +154,8 @@ func (g *gen) recordStrings(src string, arms []arm, results []*scope, sc *scope)
 		}
 	}
 	typ := g.stack[len(g.stack)-1]
-	if g.strings[typ] == nil {
-		g.strings[typ] = map[string][]string{}
+	if g.stringValues[typ] == nil {
+		g.stringValues[typ] = map[string][]string{}
 	}
-	g.strings[typ][ref] = keys
+	g.stringValues[typ][ref] = keys
 }

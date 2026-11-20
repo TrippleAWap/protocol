@@ -7,25 +7,25 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"slices"
 	"sort"
-	"strings"
 )
 
 // Packet is a packet found in the packet pool.
 type Packet struct {
+	// ID is the packet ID, as in mcpe_packet.
 	ID uint32
 	// Name is the snake_case name used in mcpe_packet; its type is "packet_" + Name.
 	Name string
-	// GoName is the name of the Go type.
+	// GoName is the name of the Go type in the packet package.
 	GoName string
-	// FromServer and FromClient say which pools the packet is in.
-	FromServer, FromClient bool
 }
 
 // Schema is a generated ProtoDef schema.
 type Schema struct {
 	// Types holds every type in the order written to protocol.json.
-	Types   *Map
+	Types *Map
+	// Packets lists every packet in the pool, by ID.
 	Packets []Packet
 	// StringValues maps a type name, then a field name, to the only values the Reader
 	// accepts for that string field. ProtoDef cannot say this, so it is not in the JSON.
@@ -56,17 +56,18 @@ func Generate(dir string) (*Schema, error) {
 		return nil, fmt.Errorf("protodef: protocol.IO or protocol.Reader not found")
 	}
 	g := &gen{
-		p:        p,
-		ioType:   ioObj.Type(),
-		reader:   types.NewPointer(readerObj.Type()),
-		named:    NewMap(),
-		names:    map[any]string{},
-		owners:   map[string]any{},
-		lookups:  map[*types.Func]*lookupTable{},
-		inlining: map[*types.Func]bool{},
-		strings:  map[string]map[string][]string{},
-		consts:   map[*Field]map[*types.Const]bool{},
-		goFields: map[string]map[string]*Field{},
+		p:            p,
+		ioType:       ioObj.Type(),
+		reader:       types.NewPointer(readerObj.Type()),
+		named:        NewMap(),
+		names:        map[any]string{},
+		owners:       map[string]any{},
+		lookups:      map[*types.Func]*lookupTable{},
+		inlining:     map[*types.Func]bool{},
+		stringValues: map[string]map[string][]string{},
+		overrides:    overrides(),
+		consts:       map[*Field]map[*types.Const]bool{},
+		goFields:     map[string]map[string]*Field{},
 	}
 	for _, n := range declaredNatives() {
 		g.owners[n] = n
@@ -96,9 +97,7 @@ func Generate(dir string) (*Schema, error) {
 		if !ok {
 			return nil, fmt.Errorf("protodef: Marshal of packet %s is not a method", pk.GoName)
 		}
-		name := g.namedType(fn, "packet_"+pk.Name, func(sc *scope) {
-			g.body(fn, map[int]*binding{-1: {place: "$"}, 0: {io: true}}, sc, "")
-		})
+		name := g.namedBody(fn, "packet_"+pk.Name, receiverBinds())
 		ids.Set(fmt.Sprint(pk.ID), pk.Name)
 		params.Set(pk.Name, name)
 		packetTypes.Set(name, nil)
@@ -134,30 +133,20 @@ func Generate(dir string) (*Schema, error) {
 		out.Set(n, v)
 	}
 
-	diags := append([]string(nil), g.diags...)
-	for _, sc := range g.pending {
-		diags = append(diags, sc.diags...)
-	}
-	sort.Strings(diags)
-	diags = dedupe(diags)
+	diags := slices.Clone(g.diags)
+	slices.Sort(diags)
+	diags = slices.Compact(diags)
 	goFields := map[string]map[string][]string{}
 	for typ, fields := range g.goFields {
 		goFields[typ] = map[string][]string{}
 		for path, f := range fields {
 			goFields[typ][f.Name] = append(goFields[typ][f.Name], path)
 		}
-	}
-	return &Schema{Types: out, Packets: packets, StringValues: g.strings, Diagnostics: diags, goFields: goFields}, nil
-}
-
-func dedupe(s []string) []string {
-	out := s[:0]
-	for i, v := range s {
-		if i == 0 || v != s[i-1] {
-			out = append(out, v)
+		for _, paths := range goFields[typ] {
+			slices.Sort(paths)
 		}
 	}
-	return out
+	return &Schema{Types: out, Packets: packets, StringValues: g.stringValues, Diagnostics: diags, goFields: goFields}, nil
 }
 
 // packets reads the packet pool from the init function of the packet package: every
@@ -182,10 +171,6 @@ func (g *gen) packets() ([]Packet, error) {
 				if !ok {
 					return true
 				}
-				varName := ""
-				if id, ok := as.Lhs[0].(*ast.Ident); ok {
-					varName = strings.ToLower(id.Name)
-				}
 				for _, el := range lit.Elts {
 					kv, ok := el.(*ast.KeyValueExpr)
 					if !ok {
@@ -204,13 +189,9 @@ func (g *gen) packets() ([]Packet, error) {
 						continue
 					}
 					id := uint32(id64)
-					pk := byID[id]
-					if pk == nil {
-						pk = &Packet{ID: id, Name: snake(goName), GoName: goName}
-						byID[id] = pk
+					if _, seen := byID[id]; !seen {
+						byID[id] = &Packet{ID: id, Name: snake(goName), GoName: goName}
 					}
-					pk.FromServer = pk.FromServer || strings.Contains(varName, "server")
-					pk.FromClient = pk.FromClient || strings.Contains(varName, "client")
 				}
 				return true
 			})
