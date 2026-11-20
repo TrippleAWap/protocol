@@ -36,6 +36,9 @@ type gen struct {
 	// fields, to give those fields mappers (see mapper.go).
 	consts map[*Field]map[*types.Const]bool
 	uses   []switchUse
+	// goFields maps a type name, then the Go field path a field of the type is read
+	// into, to that field. The test uses it to compare values with the Go structs.
+	goFields map[string]map[string]*Field
 	// pending holds scopes made outside any type, whose diagnostics are added at the end.
 	pending []*scope
 }
@@ -43,6 +46,8 @@ type gen struct {
 // binding is what a local variable or parameter stands for.
 type binding struct {
 	place string
+	// copy is set for a local holding a copy of the value at place.
+	copy  bool
 	io    bool
 	fn    *ast.FuncLit
 	fnEnv *env
@@ -117,6 +122,12 @@ func (g *gen) diag(sc *scope, pos token.Pos, format string, args ...any) {
 
 // add appends a field read into place to sc.
 func (g *gen) add(sc *scope, e *env, place string, typ any) {
+	g.addField(sc, e, place, typ, false)
+}
+
+// addField adds a field like add. converted is set for a value stored in a Go type other
+// than the one read (IntegerFunc), which the test compares by bits only.
+func (g *gen) addField(sc *scope, e *env, place string, typ any, converted bool) {
 	name := placeName(place)
 	if e != nil && e.ioName != "" && strings.HasPrefix(place, "L:") {
 		name = e.ioName
@@ -128,6 +139,34 @@ func (g *gen) add(sc *scope, e *env, place string, typ any) {
 		sc.places[place] = f.Name
 		sc.facts[place] = nil
 	}
+	if path, ok := strings.CutPrefix(place, "$."); ok && len(g.stack) > 0 && isSelectorPath(path) {
+		typ := g.stack[len(g.stack)-1]
+		if g.goFields[typ] == nil {
+			g.goFields[typ] = map[string]*Field{}
+		}
+		// A value read twice ends up holding what was read last.
+		delete(g.goFields[typ], path)
+		delete(g.goFields[typ], "~"+path)
+		if converted {
+			path = "~" + path
+		}
+		g.goFields[typ][path] = f
+	}
+}
+
+// isSelectorPath reports whether path is a chain of field names, such as Stack.Count.
+func isSelectorPath(path string) bool {
+	for _, part := range strings.Split(path, ".") {
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			if !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (sc *scope) uniq(name string) string {
@@ -295,6 +334,25 @@ func (g *gen) place(x ast.Expr, e *env) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// target returns the place a value is read into. A local holding a copy of another
+// value stops standing for it once something is read into the copy.
+func (g *gen) target(x ast.Expr, e *env) (string, bool) {
+	inner := unparen(x)
+	if u, ok := inner.(*ast.UnaryExpr); ok && u.Op == token.AND {
+		inner = unparen(u.X)
+	}
+	if id, ok := inner.(*ast.Ident); ok {
+		if o := g.obj(id); o != nil {
+			if b := e.lookup(o); b != nil && b.copy {
+				fresh := fmt.Sprintf("L:%s@%d", o.Name(), o.Pos())
+				e.vars[o] = &binding{place: fresh}
+				return fresh, true
+			}
+		}
+	}
+	return g.place(x, e)
 }
 
 // placeName makes a field name from the last part of a place.
@@ -480,10 +538,17 @@ func (g *gen) bind(lhs, rhs ast.Expr, e *env, define bool) {
 		e.vars[o] = &binding{io: true}
 		return
 	}
-	// A local taking the address of (or copying) a value stands for that value.
+	// A local taking the address of a value, or copying a reference to it (a pointer or
+	// interface), stands for that value. A copy of a plain value stands for it only
+	// until something is read into the copy (see target).
 	if p, ok := g.place(rhs, e); ok && !strings.HasPrefix(p, "G:") {
-		if u, isAddr := unparen(rhs).(*ast.UnaryExpr); (isAddr && u.Op == token.AND) || isPlaceExpr(rhs) {
+		u, isAddr := unparen(rhs).(*ast.UnaryExpr)
+		if isAddr && u.Op == token.AND || isPlaceExpr(rhs) && isReference(g.p.info.TypeOf(rhs)) {
 			e.vars[o] = &binding{place: p}
+			return
+		}
+		if isPlaceExpr(rhs) {
+			e.vars[o] = &binding{place: p, copy: true}
 			return
 		}
 	}
@@ -538,6 +603,18 @@ func (g *gen) lookupAssign(lhs, rhs ast.Expr, e *env, sc *scope) bool {
 		sc.dyn[target] = &dynamic{idPlace: idPlace, table: t}
 	}
 	return true
+}
+
+// isReference reports whether a copy of a value of type t still refers to the same value.
+func isReference(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	switch t.Underlying().(type) {
+	case *types.Pointer, *types.Interface, *types.Slice, *types.Map:
+		return true
+	}
+	return false
 }
 
 // isPlaceExpr reports whether x is a selector or index chain (a copy of a field).
@@ -644,7 +721,7 @@ func (g *gen) ioCall(name string, c *ast.CallExpr, e *env, sc *scope) {
 		g.inlineFunc(fn, nil, c.Args, e, sc, fieldName)
 		return
 	}
-	place, ok := g.place(c.Args[0], e)
+	place, ok := g.target(c.Args[0], e)
 	if !ok {
 		g.diag(sc, c.Pos(), "cannot tell what %s reads into", name)
 		return
@@ -946,7 +1023,7 @@ func (g *gen) funcCall(fn *types.Func, c *ast.CallExpr, e *env, sc *scope) {
 	sig := fn.Type().(*types.Signature)
 	if sig.Params().Len() >= 2 && len(c.Args) >= 2 && g.isIO(c.Args[0], e) {
 		if ptr, ok := sig.Params().At(1).Type().(*types.Pointer); ok && !isBasic(ptr.Elem()) {
-			if place, ok := g.place(c.Args[1], e); ok {
+			if place, ok := g.target(c.Args[1], e); ok {
 				name := g.funcType(fn)
 				if !g.emptyType(name) {
 					g.add(sc, e, place, name)
@@ -983,7 +1060,12 @@ func isBasic(t types.Type) bool {
 
 // funcType returns the named type read by a helper func(IO, *T, ...).
 func (g *gen) funcType(fn *types.Func) string {
-	return g.namedType(fn, exported(fn.Name()), func(sc *scope) {
+	name := fn.Name()
+	// marshalDataStorePropertyValue reads a DataStorePropertyValue.
+	if rest, ok := strings.CutPrefix(name, "marshal"); ok && rest != "" {
+		name = rest
+	}
+	return g.namedType(fn, exported(name), func(sc *scope) {
 		g.body(fn, map[int]*binding{0: {io: true}, 1: {place: "$"}}, sc, "")
 	})
 }

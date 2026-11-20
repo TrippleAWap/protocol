@@ -438,6 +438,50 @@ func (g *generator) small() int64 {
 	return int64(g.rng.IntN(1 << 15))
 }
 
+// integer returns a value of an integer type: mostly small, sometimes the extremes of
+// the type, so that a schema with the wrong width, sign or encoding writes other bytes.
+func (g *generator) integer(kind string) int64 {
+	if g.rng.IntN(6) != 0 {
+		return g.small()
+	}
+	lo, hi := intRange(kind)
+	switch g.rng.IntN(3) {
+	case 0:
+		return hi
+	case 1:
+		return lo
+	}
+	if lo < 0 && hi-lo < 0 {
+		// The whole int64 range: hi-lo overflows.
+		return int64(g.rng.Uint64())
+	}
+	return lo + g.rng.Int64N(hi-lo)
+}
+
+// intRange returns the smallest and largest value of an integer type, kept within
+// int64 for the 64-bit unsigned types.
+func intRange(kind string) (int64, int64) {
+	switch kind {
+	case "u8", "byterot":
+		return 0, math.MaxUint8
+	case "i8":
+		return math.MinInt8, math.MaxInt8
+	case "lu16":
+		return 0, math.MaxUint16
+	case "li16":
+		return math.MinInt16, math.MaxInt16
+	case "varint", "lu32":
+		return 0, math.MaxUint32
+	case "li32", "i32", "zigzag32":
+		return math.MinInt32, math.MaxInt32
+	case "varint128":
+		return 0, math.MaxInt32
+	case "varint64", "lu64":
+		return 0, math.MaxInt64
+	}
+	return math.MinInt64 + 1, math.MaxInt64
+}
+
 func (g *generator) fix(o *obj, name string) {
 	if g.fixed[o] == nil {
 		g.fixed[o] = map[string]bool{}
@@ -496,8 +540,11 @@ func (g *generator) gen(t any, ctx *obj) any {
 	case "bool":
 		return g.rng.IntN(2) == 0
 	case "u8", "byterot", "varint", "varint64", "varint128", "lu16", "lu32", "lu64", "li16", "li32", "i32", "li64", "zigzag32", "zigzag64", "i8":
-		return g.small()
+		return g.integer(kind)
 	case "lf32", "lf64":
+		if g.rng.IntN(4) == 0 {
+			return -float64(g.rng.IntN(1000)) / 7
+		}
 		return float64(g.rng.IntN(64)) / 4
 	case "uuid":
 		b := make([]byte, 16)
@@ -846,4 +893,47 @@ func isNamedContainer(in *interp, t any) bool {
 	}
 	k, _ := typeKind(def)
 	return k == "container"
+}
+
+// diffValues returns the paths at which two decoded values differ. Array indexes are
+// written as [], so that a path names a field of a type, not of one value.
+func diffValues(a, b any, path string, out map[string]bool) {
+	switch x := a.(type) {
+	case *obj:
+		y, ok := b.(*obj)
+		if !ok {
+			out[path] = true
+			return
+		}
+		for _, k := range keysOf(x.vals) {
+			diffValues(x.vals[k], y.vals[k], path+"."+k, out)
+		}
+		for _, k := range keysOf(y.vals) {
+			if _, ok := x.vals[k]; !ok {
+				out[path+"."+k] = true
+			}
+		}
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			out[path] = true
+			return
+		}
+		for i := range x {
+			diffValues(x[i], y[i], path+"[]", out)
+		}
+	case []byte:
+		y, ok := b.([]byte)
+		if !ok || !bytes.Equal(x, y) {
+			out[path] = true
+		}
+	case map[string]any, []map[string]any:
+		if fmt.Sprint(a) != fmt.Sprint(b) {
+			out[path] = true
+		}
+	default:
+		if a != b {
+			out[path] = true
+		}
+	}
 }

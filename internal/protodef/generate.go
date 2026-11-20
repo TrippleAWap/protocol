@@ -30,6 +30,10 @@ type Schema struct {
 	// StringValues maps a type name, then a field name, to the only values the Reader
 	// accepts for that string field. ProtoDef cannot say this, so it is not in the JSON.
 	StringValues map[string]map[string][]string
+	// goFields maps a type name, then a field name, to the paths of the Go struct fields
+	// the Reader reads it into (one per switch case), for fields read straight into one.
+	// A path starting with ~ is a field of another integer type (IntegerFunc).
+	goFields map[string]map[string][]string
 	// Diagnostics lists the code the generator could not turn into ProtoDef. A schema
 	// with diagnostics is incomplete where they point.
 	Diagnostics []string
@@ -62,6 +66,7 @@ func Generate(dir string) (*Schema, error) {
 		inlining: map[*types.Func]bool{},
 		strings:  map[string]map[string][]string{},
 		consts:   map[*Field]map[*types.Const]bool{},
+		goFields: map[string]map[string]*Field{},
 	}
 	for _, n := range declaredNatives {
 		g.owners[n] = n
@@ -132,7 +137,14 @@ func Generate(dir string) (*Schema, error) {
 	}
 	sort.Strings(diags)
 	diags = dedupe(diags)
-	return &Schema{Types: out, Packets: packets, StringValues: g.strings, Diagnostics: diags}, nil
+	goFields := map[string]map[string][]string{}
+	for typ, fields := range g.goFields {
+		goFields[typ] = map[string][]string{}
+		for path, f := range fields {
+			goFields[typ][f.Name] = append(goFields[typ][f.Name], path)
+		}
+	}
+	return &Schema{Types: out, Packets: packets, StringValues: g.strings, Diagnostics: diags, goFields: goFields}, nil
 }
 
 func dedupe(s []string) []string {

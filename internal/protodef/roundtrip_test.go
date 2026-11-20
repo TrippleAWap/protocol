@@ -9,8 +9,10 @@ import (
 	"io"
 	"math/rand/v2"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -119,7 +121,10 @@ func TestSchemaRefsResolve(t *testing.T) {
 //  1. a random value of the packet's schema type is encoded, and the Reader must read
 //     it without error and without bytes left over;
 //  2. the packet the Reader read is written again by the Writer, and the schema must
-//     decode those bytes, again with nothing left over.
+//     decode those bytes, again with nothing left over;
+//  3. the schema must decode the same values from both, except for the fields listed in
+//     rewrittenFields, which the Writer derives from other values. This catches a field
+//     read with the wrong type of the same size, such as li32 for lf32.
 //
 // Values are random but steered: a switch picks one of its cases, and a count matches
 // its array, so every branch of the schema is reached.
@@ -178,8 +183,17 @@ func TestRoundTrip(t *testing.T) {
 				accepted++
 				// Count the cases this sample reaches; the schema wrote it, so it decodes.
 				cov := &decoder{interp: in, buf: data, taken: taken}
-				if _, err := cov.read(typ, nil); err != nil || cov.off != len(data) {
+				genVal, err := cov.read(typ, nil)
+				if err != nil || cov.off != len(data) {
 					t.Fatalf("schema cannot decode what it wrote (%v)\n%s", err, hex.Dump(data))
+				}
+				// The values the schema decodes are the ones the Reader stored.
+				if o, ok := genVal.(*obj); ok {
+					cmp := &comparer{in: in, goFields: s.goFields}
+					cmp.object(typ, o, reflect.ValueOf(read), pk.Name)
+					if len(cmp.errs) > 0 {
+						t.Fatalf("the schema decodes other values than the Reader:\n%s\n%s", strings.Join(cmp.errs, "\n"), hex.Dump(data))
+					}
 				}
 
 				// 2: Writer -> schema.
@@ -190,6 +204,18 @@ func TestRoundTrip(t *testing.T) {
 					t.Fatalf("Writer failed on a packet the Reader read: %v", err)
 				}
 				written := out.Bytes()
+				// 3: the Writer wrote back the values it read, except the ones it derives.
+				if !bytes.Equal(written, data) {
+					genVal, _ := (&decoder{interp: in, buf: data}).read(typ, nil)
+					wroteVal, _ := (&decoder{interp: in, buf: written}).read(typ, nil)
+					diffs := map[string]bool{}
+					diffValues(genVal, wroteVal, "", diffs)
+					for _, path := range keysOf(boolMap(diffs)) {
+						if !rewritten(pk.Name + path) {
+							t.Fatalf("the Writer wrote %s back with another value: the schema may read it with the wrong type\ngenerated:\n%swritten:\n%s", pk.Name+path, hex.Dump(data), hex.Dump(written))
+						}
+					}
+				}
 				d := &decoder{interp: in, buf: written, taken: taken}
 				if _, err := d.read(typ, nil); err != nil {
 					t.Fatalf("schema cannot decode what the Writer wrote: %v\nwritten:\n%sgenerated:\n%s", err, hex.Dump(written), hex.Dump(data))
@@ -307,4 +333,50 @@ func TestNamesCompile(t *testing.T) {
 	for _, name := range keysOf(types) {
 		walk(name, types[name])
 	}
+}
+
+func boolMap(m map[string]bool) map[string]any {
+	out := map[string]any{}
+	for k := range m {
+		out[k] = nil
+	}
+	return out
+}
+
+// rewrittenFields are the fields (as packet name and path, [] for array elements) that
+// the Writer does not write back as read, with the reason found in the Go code.
+var rewrittenFields = []struct {
+	pattern *regexp.Regexp
+	reason  string
+}{
+	{regexp.MustCompile(`\.extra(\.|$)`), "item user data: the Writer sends none for air and picks the NBT marker itself (writer.go itemUserData)"},
+	{regexp.MustCompile(`\.(has_stack_id|stack_id)$`), "ItemInstance: has_stack_id is StackNetworkID != 0 (writer.go ItemInstance)"},
+	{regexp.MustCompile(`\.entity_metadata\.`), "EntityMetadata is a map: the Writer sends it in key order, once per key"},
+	{regexp.MustCompile(`^resource_pack_client_response\.name$`), "the response name is written from the response type"},
+	{regexp.MustCompile(`^text\.category_type$`), "the category is derived from the text type"},
+	{regexp.MustCompile(`^inventory_transaction\.(has_legacy|legacy_set_item_slots)$`), "has_legacy is derived from LegacyRequestID"},
+	{regexp.MustCompile(`\.material_reducers\[\]\.mix$`), "the reader splits mix into ID and metadata lossily (reader.go MaterialReducer)"},
+	{regexp.MustCompile(`\.unlock_requirement\.(present|ingredients)`), "present is derived from the unlock context (recipe.go RecipeUnlockRequirement)"},
+	{regexp.MustCompile(`\.aux$`), "item descriptors: the Writer sends 32767 for an empty descriptor"},
+	{regexp.MustCompile(`^player_list\.entries\[\]\.legacy_action$`), "the legacy action byte is written from the action and not read back"},
+	{regexp.MustCompile(`\.skin\.trusted$`), "Trusted is a bool sent as a string"},
+	{regexp.MustCompile(`^event\.event_ordinal$`), "the ordinal is derived from the event type"},
+	{regexp.MustCompile(`^(play_sound|clientbound_play_audio_content)\.(sound\.)?position\.[xyz]$`), "SoundPos is a float position times 8 in a BlockPos"},
+	{regexp.MustCompile(`^set_score\.entries\[\]\.type_name$`), "the type name is written from the identity type"},
+	{regexp.MustCompile(`\.legacy_(id|variant)$`), "the legacy IDs are written from the action or variant"},
+	{regexp.MustCompile(`^item_stack_response\.responses\[\]\.container_info$`), "the optional is present when there are slots"},
+	{regexp.MustCompile(`^request_ability\.value\.(bool_val|float_val)$`), "the value not used by the type is sent as zero"},
+	{regexp.MustCompile(`\.colour\.[rgb]$`), "RGB floats are kept as bytes"},
+	{regexp.MustCompile(`^player_update_entity_overrides\.name$`), "the type name is written from the type"},
+	{regexp.MustCompile(`^player_location\.type$`), "the type is written twice and read back from the second"},
+	{regexp.MustCompile(`^clientbound_update_sound_data\.update\.index$`), "the index is written from the type"},
+}
+
+func rewritten(path string) bool {
+	for _, f := range rewrittenFields {
+		if f.pattern.MatchString(path) {
+			return true
+		}
+	}
+	return false
 }

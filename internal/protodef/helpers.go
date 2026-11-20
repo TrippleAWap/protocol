@@ -30,33 +30,33 @@ func (g *gen) helper(name string, c *ast.CallExpr, e *env, sc *scope) bool {
 	case "FuncSliceOfLen", "FuncIOSliceOfLen":
 		g.countedHelper(c, arg(1), arg(2), arg(3), e, sc)
 	case "Single":
-		place, ok := g.place(arg(1), e)
+		place, ok := g.target(arg(1), e)
 		if !ok {
 			g.diag(sc, c.Pos(), "cannot tell what Single reads into")
 			return true
 		}
 		g.add(sc, e, place, g.marshalerType(g.p.info.TypeOf(arg(1)), sc, c.Pos()))
 	case "OptionalFunc":
-		place, ok := g.place(arg(1), e)
+		place, ok := g.target(arg(1), e)
 		if !ok {
 			g.diag(sc, c.Pos(), "cannot tell what OptionalFunc reads into")
 			return true
 		}
 		g.add(sc, e, place, option(g.funcValueType(arg(2), place+".val", e, sc)))
 	case "OptionalMarshaler":
-		place, ok := g.place(arg(1), e)
+		place, ok := g.target(arg(1), e)
 		if !ok {
 			g.diag(sc, c.Pos(), "cannot tell what OptionalMarshaler reads into")
 			return true
 		}
 		g.add(sc, e, place, option(g.marshalerType(optionalElem(g.p.info.TypeOf(arg(1))), sc, c.Pos())))
 	case "IntegerFunc":
-		place, ok := g.place(arg(0), e)
+		place, ok := g.target(arg(0), e)
 		if !ok {
 			g.diag(sc, c.Pos(), "cannot tell what IntegerFunc reads into")
 			return true
 		}
-		g.add(sc, e, place, g.funcValueType(arg(1), place, e, sc))
+		g.addField(sc, e, place, g.funcValueType(arg(1), place, e, sc), true)
 	default:
 		return false
 	}
@@ -64,7 +64,7 @@ func (g *gen) helper(name string, c *ast.CallExpr, e *env, sc *scope) bool {
 }
 
 func (g *gen) sliceHelper(c *ast.CallExpr, x ast.Expr, countType string, e *env, sc *scope) {
-	place, ok := g.place(x, e)
+	place, ok := g.target(x, e)
 	if !ok {
 		g.diag(sc, c.Pos(), "cannot tell what the slice is read into")
 		return
@@ -73,7 +73,7 @@ func (g *gen) sliceHelper(c *ast.CallExpr, x ast.Expr, countType string, e *env,
 }
 
 func (g *gen) funcSliceHelper(c *ast.CallExpr, x, f ast.Expr, countType string, e *env, sc *scope) {
-	place, ok := g.place(x, e)
+	place, ok := g.target(x, e)
 	if !ok {
 		g.diag(sc, c.Pos(), "cannot tell what the slice is read into")
 		return
@@ -84,7 +84,7 @@ func (g *gen) funcSliceHelper(c *ast.CallExpr, x, f ast.Expr, countType string, 
 // countedHelper reads a slice whose length was read before; f is nil for a slice of
 // Marshalers.
 func (g *gen) countedHelper(c *ast.CallExpr, l, x, f ast.Expr, e *env, sc *scope) {
-	place, ok := g.place(x, e)
+	place, ok := g.target(x, e)
 	if !ok {
 		g.diag(sc, c.Pos(), "cannot tell what the slice is read into")
 		return
