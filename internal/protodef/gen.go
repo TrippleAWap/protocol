@@ -323,8 +323,13 @@ func placeName(place string) string {
 	if place == "$" {
 		place = ""
 	}
-	name := snake(place) + idx
-	return strings.TrimPrefix(name, "_")
+	name := strings.TrimPrefix(snake(place)+idx, "_")
+	// An element of the value itself, such as x[0] of a [3]int8: ProtoDef compilers use
+	// field names as identifiers, which cannot start with a digit.
+	if name != "" && name[0] >= '0' && name[0] <= '9' {
+		name = "value_" + name
+	}
+	return name
 }
 
 // snake turns a Go identifier into snake_case: MoveActorAbsolute -> move_actor_absolute,
@@ -1155,10 +1160,48 @@ func (g *gen) countRef(x ast.Expr, e *env, sc *scope) (any, bool) {
 			return n, true
 		}
 	}
-	if p, ok := g.place(x, e); ok {
-		if r, ok := g.ref(p, sc); ok {
-			return r, true
-		}
+	p, ok := g.place(x, e)
+	if !ok {
+		return nil, false
 	}
-	return nil, false
+	r, ok := g.ref(p, sc)
+	if !ok {
+		return nil, false
+	}
+	if strings.Contains(r, "/") {
+		// ProtoDefCompiler pastes a count into JavaScript as it is, so it cannot be a path.
+		g.diag(sc, x.Pos(), "array count %s is a field of an outer container", r)
+		return r, true
+	}
+	if !unsafeCountNames[r] {
+		return r, true
+	}
+	// The compiled array code has locals of these names, and the compiler renames fields
+	// called value, size and the like: give the field a name that is pasted as is.
+	for s := sc; s != nil; s = s.parent {
+		if _, owns := s.places[p]; !owns {
+			continue
+		}
+		for _, f := range s.fields {
+			if f.Name == r && !f.Anon {
+				f.Name = s.uniq("length")
+				for q, n := range s.places {
+					if n == r {
+						s.places[q] = f.Name
+					}
+				}
+				return f.Name, true
+			}
+		}
+		break
+	}
+	g.diag(sc, x.Pos(), "array count field %q cannot be renamed", r)
+	return r, true
+}
+
+// unsafeCountNames are field names an array count cannot refer to: locals of the code
+// ProtoDefCompiler generates for an array, and names it renames in containers.
+var unsafeCountNames = map[string]bool{
+	"count": true, "countSize": true, "data": true, "size": true, "i": true, "elem": true,
+	"value": true, "enum": true, "default": true, "offset": true, "buffer": true, "ctx": true,
 }

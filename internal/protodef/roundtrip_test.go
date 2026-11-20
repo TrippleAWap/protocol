@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"sync"
 	"testing"
@@ -257,5 +258,53 @@ func reportCoverage(t *testing.T, types map[string]any, taken map[string]map[str
 	t.Logf("switch cases reached: %d of %d", hit, total)
 	for _, m := range missed {
 		t.Logf("not reached: %s", m)
+	}
+}
+
+// TestNamesCompile checks the names node-protodef's ProtoDefCompiler turns into
+// JavaScript identifiers: field names, and array and string counts, which it pastes
+// into the generated code as they are.
+func TestNamesCompile(t *testing.T) {
+	_, types := testSchema(t)
+	ident := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	var walk func(where string, typ any)
+	walk = func(where string, typ any) {
+		kind, arg := typeKind(typ)
+		switch kind {
+		case "container":
+			for _, f := range arg.([]any) {
+				fm := f.(map[string]any)
+				if name, ok := fm["name"].(string); ok {
+					// A field called buffer or ctx would hide the compiled reader's parameters.
+					if !ident.MatchString(name) || name == "buffer" || name == "ctx" {
+						t.Errorf("%s: field name %q", where, name)
+					}
+				}
+				walk(where+"."+fieldLabel(fm), fm["type"])
+			}
+		case "array", "pstring", "buffer":
+			opts, _ := arg.(map[string]any)
+			if c, ok := opts["count"].(string); ok && (!ident.MatchString(c) || unsafeCountNames[c]) {
+				t.Errorf("%s: count %q", where, c)
+			}
+			if kind == "array" {
+				walk(where, opts["type"])
+			}
+		case "mapper":
+			walk(where, arg.(map[string]any)["type"])
+		case "option":
+			walk(where, arg)
+		case "switch":
+			opts := arg.(map[string]any)
+			for _, c := range opts["fields"].(map[string]any) {
+				walk(where, c)
+			}
+			if d, ok := opts["default"]; ok {
+				walk(where, d)
+			}
+		}
+	}
+	for _, name := range keysOf(types) {
+		walk(name, types[name])
 	}
 }
