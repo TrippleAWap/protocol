@@ -32,6 +32,10 @@ type gen struct {
 	stack []string
 	// strings maps type name, then field name, to the only strings the Reader accepts.
 	strings map[string]map[string][]string
+	// consts holds the constants each field is compared with, and uses the switches on
+	// fields, to give those fields mappers (see mapper.go).
+	consts map[*Field]map[*types.Const]bool
+	uses   []switchUse
 	// pending holds scopes made outside any type, whose diagnostics are added at the end.
 	pending []*scope
 }
@@ -103,6 +107,8 @@ type lookupTable struct {
 	types map[string]types.Type
 	// returns is set for lookups that return the value instead of storing it.
 	returns bool
+	// consts holds the constant each case names.
+	consts map[string]*types.Const
 }
 
 func (g *gen) diag(sc *scope, pos token.Pos, format string, args ...any) {
@@ -857,7 +863,9 @@ func (g *gen) dynamicCall(place string, c *ast.CallExpr, sc *scope) {
 	fields := NewMap()
 	for _, k := range d.table.keys {
 		fields.Set(k, g.marshalerType(d.table.types[k], sc, c.Pos()))
+		g.noteConst(d.idPlace, d.table.consts[k], sc)
 	}
+	g.noteSwitch(d.idPlace, fields, sc)
 	g.add(sc, nil, place, switchOf(ref, fields, nil))
 }
 
@@ -1103,7 +1111,7 @@ func (g *gen) lookupTable(fn *types.Func) *lookupTable {
 	if sw == nil || sw.Tag == nil {
 		return nil
 	}
-	t := &lookupTable{types: map[string]types.Type{}, returns: returns}
+	t := &lookupTable{types: map[string]types.Type{}, returns: returns, consts: map[string]*types.Const{}}
 	for _, cc := range sw.Body.List {
 		cc := cc.(*ast.CaseClause)
 		var concrete types.Type
@@ -1134,6 +1142,7 @@ func (g *gen) lookupTable(fn *types.Func) *lookupTable {
 			key := constKey(v)
 			t.keys = append(t.keys, key)
 			t.types[key] = concrete
+			t.consts[key] = g.constOf(k)
 		}
 	}
 	if len(t.keys) == 0 {

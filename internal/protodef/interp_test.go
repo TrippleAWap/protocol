@@ -603,9 +603,9 @@ func (g *generator) gen(t any, ctx *obj) any {
 		return g.gen(ct, ctx)
 	case "mapper":
 		opts := arg.(map[string]any)
-		keys := keysOf(opts["mappings"].(map[string]any))
-		n, _ := strconv.ParseInt(keys[g.rng.IntN(len(keys))], 10, 64)
-		return n
+		mappings := opts["mappings"].(map[string]any)
+		keys := keysOf(mappings)
+		return mappings[keys[g.rng.IntN(len(keys))]]
 	case "encapsulated":
 		opts := arg.(map[string]any)
 		return g.gen(opts["type"], ctx)
@@ -801,6 +801,20 @@ func (e *encoder) write(t any, v any, ctx *obj) error {
 		return e.write(ct, v, ctx)
 	case "mapper":
 		opts := arg.(map[string]any)
+		if name, ok := v.(string); ok {
+			// A mapped name, or the number of a value without one.
+			for k, n := range opts["mappings"].(map[string]any) {
+				if n == name {
+					name = k
+					break
+				}
+			}
+			num, err := strconv.ParseInt(name, 10, 64)
+			if err != nil {
+				return fmt.Errorf("mapper has no value %q", name)
+			}
+			v = num
+		}
 		return e.write(opts["type"], v, ctx)
 	case "encapsulated":
 		opts := arg.(map[string]any)

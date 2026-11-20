@@ -44,6 +44,7 @@ func (g *gen) test(x ast.Expr, e *env, sc *scope) (test, bool) {
 				return test{}, false
 			}
 			if ref, ok := g.ref(p, sc); ok {
+				g.noteConst(p, g.constOf(val), sc)
 				return test{ref: ref, keys: []string{constKey(v)}, neg: x.Op == token.NEQ, place: p}, true
 			}
 			return g.derivedTest(p, v, x.Op == token.NEQ, sc)
@@ -281,6 +282,7 @@ func (g *gen) emitArms(ref, place string, arms []arm, e *env, sc *scope) {
 			}
 		}
 	}
+	g.noteSwitch(place, fields, sc)
 	sw := switchOf(ref, fields, def)
 	if single != "-" {
 		name := sc.uniq(single)
@@ -309,6 +311,7 @@ func (g *gen) switchStmt(s *ast.SwitchStmt, e *env, sc *scope) {
 	}
 	g.exprCalls(s.Tag, e, sc)
 	var arms []arm
+	var consts []*types.Const
 	hasDefault := false
 	for _, c := range s.Body.List {
 		cc := c.(*ast.CaseClause)
@@ -321,6 +324,7 @@ func (g *gen) switchStmt(s *ast.SwitchStmt, e *env, sc *scope) {
 				continue
 			}
 			a.keys = append(a.keys, constKey(v))
+			consts = append(consts, g.constOf(k))
 		}
 		arms = append(arms, a)
 	}
@@ -329,6 +333,11 @@ func (g *gen) switchStmt(s *ast.SwitchStmt, e *env, sc *scope) {
 	}
 	place, _ := g.place(s.Tag, e)
 	ref, ok := g.ref(place, sc)
+	if ok {
+		for _, c := range consts {
+			g.noteConst(place, c, sc)
+		}
+	}
 	if !ok {
 		for _, a := range arms {
 			if g.probe(a.list, e, sc) == branchIO {

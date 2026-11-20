@@ -61,6 +61,7 @@ func Generate(dir string) (*Schema, error) {
 		lookups:  map[*types.Func]*lookupTable{},
 		inlining: map[*types.Func]bool{},
 		strings:  map[string]map[string][]string{},
+		consts:   map[*Field]map[*types.Const]bool{},
 	}
 	for _, n := range declaredNatives {
 		g.owners[n] = n
@@ -94,6 +95,8 @@ func Generate(dir string) (*Schema, error) {
 		params.Set(pk.Name, name)
 		packetTypes.Set(name, nil)
 	}
+
+	g.applyMappers()
 
 	out := NewMap()
 	for _, n := range declaredNatives {
