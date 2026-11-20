@@ -21,8 +21,9 @@
 //     have no ordinal.
 //   - A mapper leaves a value without a name as a number. node-protodef's compiler
 //     (used by bedrock-protocol) does so too; its interpreter rejects such values.
-//   - The item user data is an "encapsulated" type whose length 0 means no data, as
-//     node-protodef reads it.
+//   - The item user data is an "encapsulated" type, a native of bedrock-protocol, which
+//     reads length 0 as no data. Unlike the Reader, bedrock-protocol does not skip
+//     bytes left over in the user data.
 //   - The one Bitset (131 bits) is a varint128.
 package protodef
 
